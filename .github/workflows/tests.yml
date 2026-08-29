@@ -4,40 +4,89 @@ on:
   push:
     branches:
       - main
+
   pull_request:
     branches:
       - main
 
+
 jobs:
+
   test:
+
     runs-on: ubuntu-latest
 
     steps:
+
+      # ------------------------------------------------------
+      # CHECKOUT
+      # ------------------------------------------------------
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
+
+      # ------------------------------------------------------
+      # PYTHON
+      # ------------------------------------------------------
+
       - name: Set up Python
         uses: actions/setup-python@v5
+
         with:
           python-version: "3.13"
           cache: "pip"
+
+
+      # ------------------------------------------------------
+      # DEPENDENCIES
+      # ------------------------------------------------------
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+
+      # ------------------------------------------------------
+      # GENERATE TRANSACTION DATA
+      # ------------------------------------------------------
+
       - name: Generate transaction dataset
         run: |
           python src/generate_data.py
+
+
+      # ------------------------------------------------------
+      # BUILD FEATURES
+      # ------------------------------------------------------
 
       - name: Build fraud features
         run: |
           python src/features/build_features.py
 
+
+      # ------------------------------------------------------
+      # BUILD MODEL
+      # ------------------------------------------------------
+
       - name: Build model artifact
         run: |
           python src/models/build_model_artifact.py
+
+
+      # ------------------------------------------------------
+      # GENERATE INCIDENT ANALYSIS
+      # ------------------------------------------------------
+
+      - name: Generate incident analysis
+        run: |
+          python src/analysis/incident_engine.py
+
+
+      # ------------------------------------------------------
+      # RUN TESTS
+      # ------------------------------------------------------
 
       - name: Run test suite
         run: |
