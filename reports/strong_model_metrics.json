@@ -1,0 +1,42 @@
+{
+    "model": "HistGradientBoostingClassifier",
+    "train": {
+        "dataset": "train",
+        "threshold": 0.5,
+        "precision": 0.9871559633027523,
+        "recall": 0.8834154351395731,
+        "f1": 0.9324090121317158,
+        "roc_auc": 0.9987610104083818,
+        "pr_auc": 0.9852149026813104,
+        "true_negatives": 34360,
+        "false_positives": 21,
+        "false_negatives": 213,
+        "true_positives": 1614
+    },
+    "validation": {
+        "dataset": "validation",
+        "threshold": 0.5,
+        "precision": 0.9017341040462428,
+        "recall": 0.44571428571428573,
+        "f1": 0.5965583173996176,
+        "roc_auc": 0.9697123189942735,
+        "pr_auc": 0.76881748185714,
+        "true_negatives": 7392,
+        "false_positives": 17,
+        "false_negatives": 194,
+        "true_positives": 156
+    },
+    "held_out_test": {
+        "dataset": "held-out test",
+        "threshold": 0.5,
+        "precision": 0.9484126984126984,
+        "recall": 0.5532407407407407,
+        "f1": 0.6988304093567251,
+        "roc_auc": 0.9760487592820062,
+        "pr_auc": 0.8468489453874196,
+        "true_negatives": 7314,
+        "false_positives": 13,
+        "false_negatives": 193,
+        "true_positives": 239
+    }
+}

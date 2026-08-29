@@ -1,0 +1,99 @@
+services:
+
+  # ==========================================================
+  # MERCHANT RISK SENTINEL DASHBOARD
+  # ==========================================================
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    container_name: merchant-risk-dashboard
+
+    ports:
+      - "8501:8501"
+
+    environment:
+      # ------------------------------------------------------
+      # INTERNAL FRAUD API
+      # ------------------------------------------------------
+      API_URL: http://api:8000
+
+      # ------------------------------------------------------
+      # LOCAL AI — OLLAMA
+      # Ollama is running on your Mac host.
+      # Docker accesses it through host.docker.internal.
+      # ------------------------------------------------------
+      OLLAMA_URL: http://host.docker.internal:11434
+      OLLAMA_MODEL: qwen3.5:4b
+
+    volumes:
+      # Source code
+      - ./src:/app/src
+
+      # Transaction data
+      - ./data:/app/data
+
+      # Fraud reports
+      - ./reports:/app/reports
+
+    depends_on:
+      - api
+
+    command:
+      - streamlit
+      - run
+      - /app/src/dashboard.py
+      - --server.address=0.0.0.0
+      - --server.port=8501
+      - --server.headless=true
+
+    restart: unless-stopped
+
+
+  # ==========================================================
+  # MERCHANT RISK SENTINEL API
+  # ==========================================================
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    container_name: merchant-risk-api
+
+    ports:
+      - "8000:8000"
+
+    environment:
+      # ------------------------------------------------------
+      # API CONFIGURATION
+      # ------------------------------------------------------
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+
+      # ------------------------------------------------------
+      # LOCAL AI — OLLAMA
+      # Available to the API if needed later.
+      # ------------------------------------------------------
+      OLLAMA_URL: http://host.docker.internal:11434
+      OLLAMA_MODEL: qwen3.5:4b
+
+    volumes:
+      # Source code
+      - ./src:/app/src
+
+      # Transaction data
+      - ./data:/app/data
+
+      # Fraud reports
+      - ./reports:/app/reports
+
+    command:
+      - uvicorn
+      - src.api.app:app
+      - --host=0.0.0.0
+      - --port=8000
+
+    restart: unless-stopped

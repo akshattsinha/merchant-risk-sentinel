@@ -1,0 +1,63 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Environment variables / secrets
+.env
+.env.*
+!.env.example
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Python tools
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Logs
+*.log
+
+# Local databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Generated temporary files
+tmp/
+temp/
+
+# Model/cache files
+*.pkl
+*.joblib
+*.cachedata/raw/transactions.csv
+src/api/app_before_graph.py
+src/api/app_before_phase1.py
+src/dashboard_backup.py
+src/dashboard_before_command_fix.py
+src/dashboard_before_incident_board.py
+src/dashboard_before_phase1.py
+data/raw/
+
+# Generated datasets
+data/processed/fraud_features.csv
+
+# Generated transaction-level reports
+reports/root_cause_analysis.csv
+reports/transaction_risk_reports.csv
+reports/prediction_audit.jsonl
+reports/incident_analysis.csv
+reports/incident_summary.json

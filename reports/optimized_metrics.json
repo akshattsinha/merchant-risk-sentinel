@@ -1,0 +1,205 @@
+{
+    "false_positive_cost": 500,
+    "false_negative_cost": 5000,
+    "selected_threshold": 0.1,
+    "validation": [
+        {
+            "threshold": 0.1,
+            "precision": 0.2708333333333333,
+            "recall": 0.78,
+            "f1": 0.4020618556701031,
+            "true_negatives": 6674,
+            "false_positives": 735,
+            "false_negatives": 77,
+            "true_positives": 273,
+            "estimated_cost": 752500
+        },
+        {
+            "threshold": 0.15,
+            "precision": 0.31025299600532624,
+            "recall": 0.6657142857142857,
+            "f1": 0.4232515894641235,
+            "true_negatives": 6891,
+            "false_positives": 518,
+            "false_negatives": 117,
+            "true_positives": 233,
+            "estimated_cost": 844000
+        },
+        {
+            "threshold": 0.2,
+            "precision": 0.339171974522293,
+            "recall": 0.6085714285714285,
+            "f1": 0.43558282208588955,
+            "true_negatives": 6994,
+            "false_positives": 415,
+            "false_negatives": 137,
+            "true_positives": 213,
+            "estimated_cost": 892500
+        },
+        {
+            "threshold": 0.25,
+            "precision": 0.35185185185185186,
+            "recall": 0.5428571428571428,
+            "f1": 0.42696629213483145,
+            "true_negatives": 7059,
+            "false_positives": 350,
+            "false_negatives": 160,
+            "true_positives": 190,
+            "estimated_cost": 975000
+        },
+        {
+            "threshold": 0.3,
+            "precision": 0.36082474226804123,
+            "recall": 0.5,
+            "f1": 0.41916167664670656,
+            "true_negatives": 7099,
+            "false_positives": 310,
+            "false_negatives": 175,
+            "true_positives": 175,
+            "estimated_cost": 1030000
+        },
+        {
+            "threshold": 0.35,
+            "precision": 0.38317757009345793,
+            "recall": 0.4685714285714286,
+            "f1": 0.42159383033419023,
+            "true_negatives": 7145,
+            "false_positives": 264,
+            "false_negatives": 186,
+            "true_positives": 164,
+            "estimated_cost": 1062000
+        },
+        {
+            "threshold": 0.4,
+            "precision": 0.391304347826087,
+            "recall": 0.43714285714285717,
+            "f1": 0.41295546558704455,
+            "true_negatives": 7171,
+            "false_positives": 238,
+            "false_negatives": 197,
+            "true_positives": 153,
+            "estimated_cost": 1104000
+        },
+        {
+            "threshold": 0.45,
+            "precision": 0.40502793296089384,
+            "recall": 0.4142857142857143,
+            "f1": 0.4096045197740113,
+            "true_negatives": 7196,
+            "false_positives": 213,
+            "false_negatives": 205,
+            "true_positives": 145,
+            "estimated_cost": 1131500
+        },
+        {
+            "threshold": 0.5,
+            "precision": 0.4212121212121212,
+            "recall": 0.39714285714285713,
+            "f1": 0.4088235294117647,
+            "true_negatives": 7218,
+            "false_positives": 191,
+            "false_negatives": 211,
+            "true_positives": 139,
+            "estimated_cost": 1150500
+        },
+        {
+            "threshold": 0.55,
+            "precision": 0.43278688524590164,
+            "recall": 0.37714285714285717,
+            "f1": 0.4030534351145038,
+            "true_negatives": 7236,
+            "false_positives": 173,
+            "false_negatives": 218,
+            "true_positives": 132,
+            "estimated_cost": 1176500
+        },
+        {
+            "threshold": 0.6,
+            "precision": 0.44404332129963897,
+            "recall": 0.3514285714285714,
+            "f1": 0.3923444976076555,
+            "true_negatives": 7255,
+            "false_positives": 154,
+            "false_negatives": 227,
+            "true_positives": 123,
+            "estimated_cost": 1212000
+        },
+        {
+            "threshold": 0.65,
+            "precision": 0.468503937007874,
+            "recall": 0.34,
+            "f1": 0.39403973509933776,
+            "true_negatives": 7274,
+            "false_positives": 135,
+            "false_negatives": 231,
+            "true_positives": 119,
+            "estimated_cost": 1222500
+        },
+        {
+            "threshold": 0.7,
+            "precision": 0.48717948717948717,
+            "recall": 0.32571428571428573,
+            "f1": 0.3904109589041096,
+            "true_negatives": 7289,
+            "false_positives": 120,
+            "false_negatives": 236,
+            "true_positives": 114,
+            "estimated_cost": 1240000
+        },
+        {
+            "threshold": 0.75,
+            "precision": 0.4818181818181818,
+            "recall": 0.3028571428571429,
+            "f1": 0.3719298245614035,
+            "true_negatives": 7295,
+            "false_positives": 114,
+            "false_negatives": 244,
+            "true_positives": 106,
+            "estimated_cost": 1277000
+        },
+        {
+            "threshold": 0.8,
+            "precision": 0.5,
+            "recall": 0.27714285714285714,
+            "f1": 0.35661764705882354,
+            "true_negatives": 7312,
+            "false_positives": 97,
+            "false_negatives": 253,
+            "true_positives": 97,
+            "estimated_cost": 1313500
+        },
+        {
+            "threshold": 0.85,
+            "precision": 0.5321637426900585,
+            "recall": 0.26,
+            "f1": 0.3493282149712092,
+            "true_negatives": 7329,
+            "false_positives": 80,
+            "false_negatives": 259,
+            "true_positives": 91,
+            "estimated_cost": 1335000
+        },
+        {
+            "threshold": 0.9,
+            "precision": 0.6204379562043796,
+            "recall": 0.24285714285714285,
+            "f1": 0.3490759753593429,
+            "true_negatives": 7357,
+            "false_positives": 52,
+            "false_negatives": 265,
+            "true_positives": 85,
+            "estimated_cost": 1351000
+        }
+    ],
+    "held_out_test": {
+        "threshold": 0.1,
+        "precision": 0.39135021097046413,
+        "recall": 0.8587962962962963,
+        "f1": 0.5376811594202898,
+        "true_negatives": 6750,
+        "false_positives": 577,
+        "false_negatives": 61,
+        "true_positives": 371,
+        "estimated_cost": 593500
+    }
+}
