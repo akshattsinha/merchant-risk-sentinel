@@ -43,7 +43,7 @@ from src.audit.audit_logger import (
 app = FastAPI(
     title="Merchant Risk Sentinel API",
     description="Real-time merchant fraud risk prediction API",
-    version="1.0.0"
+    version="1.0.0",
 )
 
 
@@ -59,16 +59,47 @@ predictor = None
 # ============================================================
 
 class TransactionRequest(BaseModel):
-    customer_id: str
-    merchant_id: str
-    amount: float = Field(gt=0)
-    timestamp: str
-    payment_method: str
-    device_id: str
-    ip_id: str
-    address_id: str
-    account_age_days: int = Field(ge=1)
-    location: str
+
+    customer_id: str = Field(
+        min_length=1
+    )
+
+    merchant_id: str = Field(
+        min_length=1
+    )
+
+    amount: float = Field(
+        gt=0,
+        finite=True
+    )
+
+    timestamp: str = Field(
+        min_length=1
+    )
+
+    payment_method: str = Field(
+        min_length=1
+    )
+
+    device_id: str = Field(
+        min_length=1
+    )
+
+    ip_id: str = Field(
+        min_length=1
+    )
+
+    address_id: str = Field(
+        min_length=1
+    )
+
+    account_age_days: int = Field(
+        ge=1
+    )
+
+    location: str = Field(
+        min_length=1
+    )
 
 
 # ============================================================
@@ -93,7 +124,7 @@ def root():
     return {
         "service": "Merchant Risk Sentinel",
         "status": "online",
-        "version": "1.0.0"
+        "version": "1.0.0",
     }
 
 
@@ -106,7 +137,7 @@ def health():
 
     return {
         "status": "healthy",
-        "model_loaded": predictor is not None
+        "model_loaded": predictor is not None,
     }
 
 
@@ -121,22 +152,28 @@ def model_info():
 
         raise HTTPException(
             status_code=503,
-            detail="Prediction model is not loaded."
+            detail="Prediction model is not loaded.",
         )
 
     return {
         "model": "HistGradientBoosting",
-        "artifact": "reports/fraud_model.joblib",
 
-        # Existing API value retained.
+        "artifact": (
+            "reports/fraud_model.joblib"
+        ),
+
         "operating_threshold": 0.30,
 
         "risk_levels": {
+
             "LOW": "< 0.10",
+
             "MEDIUM": "0.10 - 0.39",
+
             "HIGH": "0.40 - 0.74",
-            "CRITICAL": ">= 0.75"
-        }
+
+            "CRITICAL": ">= 0.75",
+        },
     }
 
 
@@ -153,7 +190,7 @@ def predict(
 
         raise HTTPException(
             status_code=503,
-            detail="Prediction model is not loaded."
+            detail="Prediction model is not loaded.",
         )
 
     try:
@@ -171,11 +208,11 @@ def predict(
         # GENERATE ID FOR LIVE TRANSACTION
         # ----------------------------------------------------
         #
-        # The incoming dashboard request does not contain
-        # a transaction_id, so we create one for the audit
-        # trail.
+        # The incoming API request does not contain a
+        # transaction_id, so we generate one for the
+        # audit trail.
         #
-        # Existing transaction fields are NOT changed.
+        # Existing transaction fields are not modified.
         # ----------------------------------------------------
 
         transaction_data[
@@ -189,7 +226,7 @@ def predict(
 
 
         # ----------------------------------------------------
-        # EXISTING ML PREDICTION
+        # ML PREDICTION
         # ----------------------------------------------------
 
         result = predictor.predict(
@@ -198,10 +235,11 @@ def predict(
 
 
         # ----------------------------------------------------
-        # EXISTING RISK DATA
+        # RISK INFORMATION
         # ----------------------------------------------------
 
         risk = {
+
             "fraud_probability":
                 result[
                     "fraud_probability"
@@ -212,7 +250,7 @@ def predict(
                     result[
                         "fraud_probability"
                     ] * 100,
-                    2
+                    2,
                 ),
 
             "risk_score":
@@ -228,12 +266,12 @@ def predict(
             "recommended_action":
                 result[
                     "recommended_action"
-                ]
+                ],
         }
 
 
         # ----------------------------------------------------
-        # EXISTING BEHAVIORAL FEATURES
+        # BEHAVIORAL FEATURES
         # ----------------------------------------------------
 
         behavioral_features = (
@@ -244,33 +282,28 @@ def predict(
 
 
         # ----------------------------------------------------
-        # DETERMINISTIC RISK EVIDENCE
+        # RISK EVIDENCE
         # ----------------------------------------------------
         #
-        # This layer does NOT make a fraud decision.
+        # This layer converts the model and behavioral
+        # signals into structured evidence.
         #
-        # It converts the existing ML/risk-engine signals
-        # into structured evidence.
+        # It does not replace the ML prediction.
         # ----------------------------------------------------
 
         evidence = build_risk_evidence(
             risk=risk,
-            behavioral_features=behavioral_features,
+            behavioral_features=(
+                behavioral_features
+            ),
         )
 
 
         # ----------------------------------------------------
         # AUDIT TRAIL
         # ----------------------------------------------------
-        #
-        # Every live prediction gets an append-only audit
-        # record.
-        #
-        # The selected operating threshold from our
-        # validation optimization is 0.30.
-        # ----------------------------------------------------
 
-        audit_record = write_prediction_audit(
+        write_prediction_audit(
             transaction=transaction_data,
             risk=risk,
             evidence=evidence,
@@ -288,23 +321,34 @@ def predict(
 
             "status": "success",
 
-            "transaction": transaction_data,
+            "transaction":
+                transaction_data,
 
-            "risk": risk,
+            "risk":
+                risk,
 
             "behavioral_features":
                 behavioral_features,
 
-            "evidence": evidence,
-
+            "evidence":
+                evidence,
         }
 
 
-    except Exception as error:
+    except HTTPException:
+
+        raise
+
+
+    except Exception:
+
+        # Do not expose internal Python exceptions,
+        # model paths, stack traces, or implementation
+        # details to API clients.
 
         raise HTTPException(
-            status_code=400,
-            detail=str(error)
+            status_code=500,
+            detail="Prediction failed.",
         )
 
 
@@ -325,6 +369,7 @@ def get_incident_relationships(
     This endpoint is read-only.
 
     It does not modify:
+
     - ML predictions
     - risk scores
     - incident generation
@@ -340,13 +385,13 @@ def get_incident_relationships(
 
         if not result.get(
             "found",
-            False
+            False,
         ):
 
             raise HTTPException(
                 status_code=404,
                 detail=(
-                    f"No relationship data found "
+                    "No relationship data found "
                     f"for incident {incident_id}"
                 ),
             )
@@ -360,13 +405,12 @@ def get_incident_relationships(
         raise
 
 
-    except Exception as exc:
+    except Exception:
 
         raise HTTPException(
             status_code=500,
             detail=(
-                "Relationship analysis failed: "
-                f"{str(exc)}"
+                "Relationship analysis failed."
             ),
         )
 
@@ -384,6 +428,9 @@ def get_transaction_relationships(
 
     """
     Return relationship evidence around a transaction.
+
+    A missing transaction is treated as a normal
+    not-found condition and returns HTTP 404.
     """
 
     try:
@@ -393,35 +440,38 @@ def get_transaction_relationships(
         )
 
 
-        if not result.get(
-            "found",
-            False
-        ):
-
-            raise HTTPException(
-                status_code=404,
-                detail=(
-                    f"No relationship data found "
-                    f"for transaction "
-                    f"{transaction_id}"
-                ),
-            )
-
-
-        return result
-
-
     except HTTPException:
 
         raise
 
 
-    except Exception as exc:
+    except Exception:
 
         raise HTTPException(
             status_code=500,
             detail=(
-                "Transaction relationship analysis "
-                f"failed: {str(exc)}"
+                "Transaction relationship "
+                "analysis failed."
             ),
         )
+
+
+    # --------------------------------------------------------
+    # TRANSACTION NOT FOUND
+    # --------------------------------------------------------
+
+    if not result.get(
+        "found",
+        False,
+    ):
+
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "No relationship data found "
+                f"for transaction {transaction_id}"
+            ),
+        )
+
+
+    return result
