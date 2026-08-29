@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import joblib
@@ -5,402 +6,784 @@ import numpy as np
 import pandas as pd
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+# ============================================================
+# PATHS
+# ============================================================
 
-MODEL_FILE = PROJECT_ROOT / "reports" / "fraud_model.joblib"
-FEATURE_FILE = PROJECT_ROOT / "data" / "processed" / "fraud_features.csv"
+BASE_DIR = Path(__file__).resolve().parents[2]
 
+MODEL_FILE = (
+    BASE_DIR
+    / "reports"
+    / "fraud_model.joblib"
+)
+
+METADATA_FILE = (
+    BASE_DIR
+    / "reports"
+    / "fraud_model_metadata.json"
+)
+
+
+# ============================================================
+# LIVE RISK PREDICTOR
+# ============================================================
 
 class LiveRiskPredictor:
 
     def __init__(self):
 
+        # ----------------------------------------------------
+        # Load model artifact
+        # ----------------------------------------------------
+
         if not MODEL_FILE.exists():
+
             raise FileNotFoundError(
                 f"Model artifact not found at: {MODEL_FILE}"
             )
 
-        if not FEATURE_FILE.exists():
-            raise FileNotFoundError(
-                f"Feature dataset not found at: {FEATURE_FILE}"
-            )
-
-        self.artifact = joblib.load(
+        artifact = joblib.load(
             MODEL_FILE
         )
 
-        self.pipeline = self.artifact[
-            "pipeline"
-        ]
+        self.pipeline = artifact["pipeline"]
 
-        self.feature_columns = self.artifact[
+        self.feature_columns = artifact[
             "feature_columns"
         ]
 
-        self.history = pd.read_csv(
-            FEATURE_FILE
+        self.numeric_features = artifact.get(
+            "numeric_features",
+            []
         )
 
-        self.history["timestamp"] = pd.to_datetime(
-            self.history["timestamp"]
+        self.categorical_features = artifact.get(
+            "categorical_features",
+            []
         )
 
-        self.history = self.history.sort_values(
-            "timestamp"
-        ).reset_index(drop=True)
+        # ----------------------------------------------------
+        # Load model metadata
+        # ----------------------------------------------------
 
-    def build_features(self, transaction):
+        if not METADATA_FILE.exists():
 
-        history = self.history
+            raise FileNotFoundError(
+                f"Model metadata not found at: {METADATA_FILE}"
+            )
 
-        timestamp = pd.Timestamp(
-            transaction["timestamp"]
+        with open(
+            METADATA_FILE,
+            "r"
+        ) as file:
+
+            metadata = json.load(file)
+
+        self.metadata = metadata
+
+        # ----------------------------------------------------
+        # Cost-sensitive operating threshold
+        # ----------------------------------------------------
+
+        self.operating_threshold = float(
+            metadata.get(
+                "threshold",
+                0.30
+            )
         )
 
-        customer_id = transaction["customer_id"]
-        merchant_id = transaction["merchant_id"]
-        device_id = transaction["device_id"]
-        ip_id = transaction["ip_id"]
-        address_id = transaction["address_id"]
 
-        amount = float(
-            transaction["amount"]
-        )
+    # ========================================================
+    # BUILD LIVE FEATURES
+    # ========================================================
 
-        payment_method = transaction[
-            "payment_method"
-        ]
+    def build_features(
+        self,
+        transaction
+    ):
 
-        location = transaction[
+        # ----------------------------------------------------
+        # Convert transaction to DataFrame
+        # ----------------------------------------------------
+
+        if isinstance(
+            transaction,
+            pd.DataFrame
+        ):
+
+            df = transaction.copy()
+
+        else:
+
+            df = pd.DataFrame(
+                [transaction]
+            )
+
+
+        # ====================================================
+        # REQUIRED INPUT COLUMNS
+        # ====================================================
+
+        required_columns = [
+            "amount",
+            "customer_id",
+            "merchant_id",
+            "timestamp",
+            "payment_method",
+            "device_id",
+            "ip_id",
+            "address_id",
+            "account_age_days",
             "location"
         ]
 
-        customer_history = history[
-            history["customer_id"] == customer_id
-        ]
-
-        merchant_history = history[
-            history["merchant_id"] == merchant_id
-        ]
-
-        payment_history = history[
-            history["payment_method"] == payment_method
-        ]
-
-        before_customer = customer_history[
-            customer_history["timestamp"] < timestamp
-        ]
-
-        before_merchant = merchant_history[
-            merchant_history["timestamp"] < timestamp
-        ]
-
-        recent_customer = before_customer[
-            before_customer["timestamp"]
-            >= timestamp - pd.Timedelta(hours=1)
-        ]
-
-        device_customers = history[
-            history["device_id"] == device_id
-        ]["customer_id"].nunique()
-
-        ip_customers = history[
-            history["ip_id"] == ip_id
-        ]["customer_id"].nunique()
-
-        address_customers = history[
-            history["address_id"] == address_id
-        ]["customer_id"].nunique()
-
-        if len(before_customer) > 0:
-            customer_avg = before_customer[
-                "amount"
-            ].mean()
-        else:
-            customer_avg = history[
-                "amount"
-            ].median()
-
-        if len(before_merchant) > 0:
-            merchant_avg = before_merchant[
-                "amount"
-            ].mean()
-        else:
-            merchant_avg = history[
-                "amount"
-            ].median()
-
-        payment_frequency = len(
-            payment_history[
-                payment_history["timestamp"] < timestamp
-            ]
-        )
-
-        if (
-            "is_refund" in merchant_history.columns
-            and len(merchant_history) > 0
-        ):
-            merchant_refund_ratio = merchant_history[
-                "is_refund"
-            ].mean()
-        else:
-            merchant_refund_ratio = 0.0
-
-        if (
-            "is_chargeback" in merchant_history.columns
-            and len(merchant_history) > 0
-        ):
-            merchant_chargeback_ratio = merchant_history[
-                "is_chargeback"
-            ].mean()
-        else:
-            merchant_chargeback_ratio = 0.0
-
-        if "is_refund" in before_customer.columns:
-
-            refund_count = before_customer[
-                "is_refund"
-            ].sum()
-
-            refund_amount = before_customer.loc[
-                before_customer["is_refund"] == 1,
-                "amount"
-            ].sum()
-
-        else:
-
-            refund_count = 0
-            refund_amount = 0.0
-
-        if "is_chargeback" in before_customer.columns:
-
-            chargeback_count = before_customer[
-                "is_chargeback"
-            ].sum()
-
-            chargeback_amount = before_customer.loc[
-                before_customer["is_chargeback"] == 1,
-                "amount"
-            ].sum()
-
-        else:
-
-            chargeback_count = 0
-            chargeback_amount = 0.0
-
-        previous_transactions = (
-            before_customer
-            .sort_values("timestamp")
-        )
-
-        if len(previous_transactions) > 0:
-
-            previous = previous_transactions.iloc[-1]
-
-            seconds_since = (
-                timestamp - previous["timestamp"]
-            ).total_seconds()
-
-            location_changed = int(
-                previous["location"] != location
-            )
-
-            device_changed = int(
-                previous["device_id"] != device_id
-            )
-
-            ip_changed = int(
-                previous["ip_id"] != ip_id
-            )
-
-        else:
-
-            seconds_since = 999999
-
-            location_changed = 1
-            device_changed = 1
-            ip_changed = 1
-
-        transaction_count = len(
-            recent_customer
-        )
-
-        high_velocity = int(
-            transaction_count >= 5
-        )
-
-        very_high_velocity = int(
-            transaction_count >= 10
-        )
-
-        account_age = int(
-            transaction["account_age_days"]
-        )
-
-        is_new_account = int(
-            account_age <= 30
-        )
-
-        is_very_new_account = int(
-            account_age <= 7
-        )
-
-        customer_count = len(
-            before_customer
-        )
-
-        merchant_count = len(
-            before_merchant
-        )
-
-        customer_total_amount = (
-            before_customer["amount"].sum()
-            if customer_count > 0
-            else 0.0
-        )
-
-        refund_ratio = (
-            refund_count / customer_count
-            if customer_count > 0
-            else 0.0
-        )
-
-        chargeback_ratio = (
-            chargeback_count / customer_count
-            if customer_count > 0
-            else 0.0
-        )
-
-        refund_amount_ratio = (
-            refund_amount / customer_total_amount
-            if customer_total_amount > 0
-            else 0.0
-        )
-
-        chargeback_amount_ratio = (
-            chargeback_amount / customer_total_amount
-            if customer_total_amount > 0
-            else 0.0
-        )
-
-        amount_vs_customer_average = (
-            amount / customer_avg
-            if customer_avg > 0
-            else 1.0
-        )
-
-        amount_vs_merchant_average = (
-            amount / merchant_avg
-            if merchant_avg > 0
-            else 1.0
-        )
-
-        behavioral_signals = sum(
-            [
-                int(
-                    amount_vs_customer_average > 3
-                ),
-                int(
-                    amount_vs_merchant_average > 3
-                ),
-                is_new_account,
-                is_very_new_account,
-                high_velocity,
-                very_high_velocity,
-                int(device_customers >= 3),
-                int(ip_customers >= 3),
-                int(address_customers >= 3),
-                location_changed,
-                device_changed,
-                ip_changed,
-                int(
-                    merchant_refund_ratio > 0.05
-                ),
-                int(
-                    merchant_chargeback_ratio > 0.02
-                )
-            ]
-        )
-
-        row = {
-            "amount": amount,
-            "payment_method": payment_method,
-            "account_age_days": account_age,
-            "location": location,
-            "refund_count": refund_count,
-            "refund_amount": refund_amount,
-            "chargeback_count": chargeback_count,
-            "chargeback_amount": chargeback_amount,
-            "is_refund": 0,
-            "is_chargeback": 0,
-            "transaction_count_last_hour": transaction_count,
-            "device_customer_count": device_customers,
-            "ip_customer_count": ip_customers,
-            "address_customer_count": address_customers,
-            "payment_method_frequency": payment_frequency,
-            "merchant_average_amount": merchant_avg,
-            "amount_to_merchant_average": (
-                amount / merchant_avg
-                if merchant_avg > 0
-                else 1.0
-            ),
-            "merchant_refund_ratio": merchant_refund_ratio,
-            "merchant_chargeback_ratio": merchant_chargeback_ratio,
-            "log_amount": np.log1p(amount),
-            "customer_transaction_count_before": customer_count,
-            "customer_avg_amount_before": customer_avg,
-            "amount_vs_customer_average": amount_vs_customer_average,
-            "merchant_transaction_count_before": merchant_count,
-            "merchant_avg_amount_before": merchant_avg,
-            "amount_vs_merchant_average": amount_vs_merchant_average,
-            "payment_method_count_before": payment_frequency,
-            "is_new_account": is_new_account,
-            "is_very_new_account": is_very_new_account,
-            "refund_to_transaction_ratio": refund_ratio,
-            "chargeback_to_transaction_ratio": chargeback_ratio,
-            "refund_amount_ratio": refund_amount_ratio,
-            "chargeback_amount_ratio": chargeback_amount_ratio,
-            "hour": timestamp.hour,
-            "day_of_week": timestamp.dayofweek,
-            "is_weekend": int(
-                timestamp.dayofweek >= 5
-            ),
-            "seconds_since_customer_transaction": seconds_since,
-            "high_velocity_flag": high_velocity,
-            "very_high_velocity_flag": very_high_velocity,
-            "location_changed": location_changed,
-            "device_changed": device_changed,
-            "ip_changed": ip_changed,
-            "behavioral_risk_signal_count": behavioral_signals
-        }
-
-        features = pd.DataFrame(
-            [row]
-        )
-
         missing_columns = [
             column
-            for column in self.feature_columns
-            if column not in features.columns
+            for column in required_columns
+            if column not in df.columns
         ]
 
         if missing_columns:
+
             raise ValueError(
-                "Missing model features: "
-                + ", ".join(missing_columns)
+                "Missing required transaction columns: "
+                + ", ".join(
+                    missing_columns
+                )
             )
 
-        features = features[
-            self.feature_columns
+
+        # ====================================================
+        # BASIC TYPES
+        # ====================================================
+
+        df["timestamp"] = pd.to_datetime(
+            df["timestamp"],
+            errors="coerce"
+        )
+
+        if df["timestamp"].isna().any():
+
+            raise ValueError(
+                "Transaction timestamp must be valid."
+            )
+
+
+        df["amount"] = pd.to_numeric(
+            df["amount"],
+            errors="coerce"
+        )
+
+        if df["amount"].isna().any():
+
+            raise ValueError(
+                "Transaction amount must be numeric."
+            )
+
+
+        df["account_age_days"] = pd.to_numeric(
+            df["account_age_days"],
+            errors="coerce"
+        )
+
+        df["account_age_days"] = (
+            df["account_age_days"]
+            .fillna(0)
+        )
+
+
+        # ====================================================
+        # BASIC TRANSACTION FEATURE
+        # ====================================================
+
+        df["log_amount"] = np.log1p(
+            df["amount"]
+        )
+
+
+        # ====================================================
+        # CUSTOMER HISTORICAL FEATURES
+        # ====================================================
+
+        if (
+            "customer_transaction_count_before"
+            not in df.columns
+        ):
+
+            df[
+                "customer_transaction_count_before"
+            ] = 0
+
+
+        if (
+            "customer_avg_amount_before"
+            not in df.columns
+        ):
+
+            df[
+                "customer_avg_amount_before"
+            ] = df["amount"]
+
+
+        if (
+            "amount_vs_customer_average"
+            not in df.columns
+        ):
+
+            df[
+                "amount_vs_customer_average"
+            ] = (
+                df["amount"]
+                / (
+                    df[
+                        "customer_avg_amount_before"
+                    ]
+                    + 1
+                )
+            )
+
+
+        # ====================================================
+        # MERCHANT HISTORICAL FEATURES
+        # ====================================================
+
+        if (
+            "merchant_transaction_count_before"
+            not in df.columns
+        ):
+
+            df[
+                "merchant_transaction_count_before"
+            ] = 0
+
+
+        if (
+            "merchant_avg_amount_before"
+            not in df.columns
+        ):
+
+            df[
+                "merchant_avg_amount_before"
+            ] = df["amount"]
+
+
+        if (
+            "amount_vs_merchant_average"
+            not in df.columns
+        ):
+
+            df[
+                "amount_vs_merchant_average"
+            ] = (
+                df["amount"]
+                / (
+                    df[
+                        "merchant_avg_amount_before"
+                    ]
+                    + 1
+                )
+            )
+
+
+        # ====================================================
+        # ADDITIONAL MERCHANT FEATURES
+        # ====================================================
+
+        #
+        # These features are present in the trained model
+        # artifact but are not available from a single live
+        # transaction.
+        #
+        # Neutral defaults are therefore used unless the
+        # caller supplies historical values explicitly.
+        #
+
+        if (
+            "merchant_average_amount"
+            not in df.columns
+        ):
+
+            df[
+                "merchant_average_amount"
+            ] = df["amount"]
+
+
+        if (
+            "amount_to_merchant_average"
+            not in df.columns
+        ):
+
+            df[
+                "amount_to_merchant_average"
+            ] = (
+                df["amount"]
+                / (
+                    df[
+                        "merchant_average_amount"
+                    ]
+                    + 1
+                )
+            )
+
+
+        if (
+            "merchant_refund_ratio"
+            not in df.columns
+        ):
+
+            df[
+                "merchant_refund_ratio"
+            ] = 0.0
+
+
+        if (
+            "merchant_chargeback_ratio"
+            not in df.columns
+        ):
+
+            df[
+                "merchant_chargeback_ratio"
+            ] = 0.0
+
+
+        # ====================================================
+        # PAYMENT METHOD FEATURES
+        # ====================================================
+
+        if (
+            "payment_method_count_before"
+            not in df.columns
+        ):
+
+            df[
+                "payment_method_count_before"
+            ] = 0
+
+
+        if (
+            "payment_method_frequency"
+            not in df.columns
+        ):
+
+            df[
+                "payment_method_frequency"
+            ] = 1.0
+
+
+        # ====================================================
+        # DEVICE / IP / ADDRESS FEATURES
+        # ====================================================
+
+        if (
+            "device_customer_count"
+            not in df.columns
+        ):
+
+            df[
+                "device_customer_count"
+            ] = 1
+
+
+        if (
+            "ip_customer_count"
+            not in df.columns
+        ):
+
+            df[
+                "ip_customer_count"
+            ] = 1
+
+
+        if (
+            "address_customer_count"
+            not in df.columns
+        ):
+
+            df[
+                "address_customer_count"
+            ] = 1
+
+
+        # ====================================================
+        # ACCOUNT AGE FEATURES
+        # ====================================================
+
+        if (
+            "is_new_account"
+            not in df.columns
+        ):
+
+            df[
+                "is_new_account"
+            ] = (
+                df["account_age_days"] <= 14
+            ).astype(int)
+
+
+        if (
+            "is_very_new_account"
+            not in df.columns
+        ):
+
+            df[
+                "is_very_new_account"
+            ] = (
+                df["account_age_days"] <= 7
+            ).astype(int)
+
+
+        # ====================================================
+        # REFUND / CHARGEBACK INPUTS
+        # ====================================================
+
+        if "refund_count" not in df.columns:
+
+            df["refund_count"] = 0
+
+
+        if "refund_amount" not in df.columns:
+
+            df["refund_amount"] = 0.0
+
+
+        if "chargeback_count" not in df.columns:
+
+            df["chargeback_count"] = 0
+
+
+        if "chargeback_amount" not in df.columns:
+
+            df["chargeback_amount"] = 0.0
+
+
+        if "is_refund" not in df.columns:
+
+            df["is_refund"] = 0
+
+
+        if "is_chargeback" not in df.columns:
+
+            df["is_chargeback"] = 0
+
+
+        # ====================================================
+        # CUSTOMER REFUND / CHARGEBACK FEATURES
+        # ====================================================
+
+        if (
+            "refund_to_transaction_ratio"
+            not in df.columns
+        ):
+
+            df[
+                "refund_to_transaction_ratio"
+            ] = (
+                df["refund_count"]
+                / (
+                    df[
+                        "customer_transaction_count_before"
+                    ]
+                    + 1
+                )
+            )
+
+
+        if (
+            "chargeback_to_transaction_ratio"
+            not in df.columns
+        ):
+
+            df[
+                "chargeback_to_transaction_ratio"
+            ] = (
+                df["chargeback_count"]
+                / (
+                    df[
+                        "customer_transaction_count_before"
+                    ]
+                    + 1
+                )
+            )
+
+
+        if (
+            "refund_amount_ratio"
+            not in df.columns
+        ):
+
+            df[
+                "refund_amount_ratio"
+            ] = (
+                df["refund_amount"]
+                / (
+                    df["amount"]
+                    + 1
+                )
+            )
+
+
+        if (
+            "chargeback_amount_ratio"
+            not in df.columns
+        ):
+
+            df[
+                "chargeback_amount_ratio"
+            ] = (
+                df["chargeback_amount"]
+                / (
+                    df["amount"]
+                    + 1
+                )
+            )
+
+
+        # ====================================================
+        # TEMPORAL FEATURES
+        # ====================================================
+
+        df["hour"] = (
+            df["timestamp"].dt.hour
+        )
+
+        df["day_of_week"] = (
+            df["timestamp"].dt.dayofweek
+        )
+
+        df["is_weekend"] = (
+            df["day_of_week"] >= 5
+        ).astype(int)
+
+
+        # ====================================================
+        # TIME SINCE CUSTOMER TRANSACTION
+        # ====================================================
+
+        #
+        # A single live transaction does not contain
+        # historical customer transactions.
+        #
+        # 999999 represents "no previous transaction
+        # available".
+        #
+
+        if (
+            "seconds_since_customer_transaction"
+            not in df.columns
+        ):
+
+            df[
+                "seconds_since_customer_transaction"
+            ] = 999999
+
+
+        # ====================================================
+        # VELOCITY FEATURES
+        # ====================================================
+
+        if (
+            "transaction_count_last_hour"
+            not in df.columns
+        ):
+
+            df[
+                "transaction_count_last_hour"
+            ] = 0
+
+
+        if (
+            "high_velocity_flag"
+            not in df.columns
+        ):
+
+            df[
+                "high_velocity_flag"
+            ] = (
+                df[
+                    "seconds_since_customer_transaction"
+                ] < 300
+            ).astype(int)
+
+
+        if (
+            "very_high_velocity_flag"
+            not in df.columns
+        ):
+
+            df[
+                "very_high_velocity_flag"
+            ] = (
+                df[
+                    "seconds_since_customer_transaction"
+                ] < 60
+            ).astype(int)
+
+
+        # ====================================================
+        # GEOGRAPHIC CHANGE
+        # ====================================================
+
+        if (
+            "location_changed"
+            not in df.columns
+        ):
+
+            df[
+                "location_changed"
+            ] = 0
+
+
+        # ====================================================
+        # DEVICE CHANGE
+        # ====================================================
+
+        if (
+            "device_changed"
+            not in df.columns
+        ):
+
+            df[
+                "device_changed"
+            ] = 0
+
+
+        # ====================================================
+        # IP CHANGE
+        # ====================================================
+
+        if (
+            "ip_changed"
+            not in df.columns
+        ):
+
+            df[
+                "ip_changed"
+            ] = 0
+
+
+        # ====================================================
+        # BEHAVIORAL RISK SIGNAL COUNT
+        # ====================================================
+
+        risk_flags = [
+            "is_new_account",
+            "is_very_new_account",
+            "high_velocity_flag",
+            "very_high_velocity_flag",
+            "location_changed",
+            "device_changed",
+            "ip_changed"
         ]
+
+        df[
+            "behavioral_risk_signal_count"
+        ] = (
+            df[risk_flags]
+            .sum(axis=1)
+        )
+
+
+        # ====================================================
+        # INCIDENT / LABEL COLUMNS
+        # ====================================================
+
+        if "is_fraud" not in df.columns:
+
+            df["is_fraud"] = 0
+
+
+        if "fraud_type" not in df.columns:
+
+            df["fraud_type"] = "normal"
+
+
+        if "incident_id" not in df.columns:
+
+            df["incident_id"] = ""
+
+
+        if "incident_type" not in df.columns:
+
+            df["incident_type"] = ""
+
+
+        if (
+            "incident_severity"
+            not in df.columns
+        ):
+
+            df["incident_severity"] = ""
+
+
+        # ====================================================
+        # NUMERIC TYPE CLEANUP
+        # ====================================================
+
+        for column in self.numeric_features:
+
+            if column in df.columns:
+
+                df[column] = pd.to_numeric(
+                    df[column],
+                    errors="coerce"
+                )
+
+
+        # ====================================================
+        # MODEL FEATURE VALIDATION
+        # ====================================================
+
+        missing_features = [
+            column
+            for column in self.feature_columns
+            if column not in df.columns
+        ]
+
+        if missing_features:
+
+            raise ValueError(
+                "Unable to construct model features. "
+                "Missing columns: "
+                + ", ".join(
+                    missing_features
+                )
+            )
+
+
+        # ====================================================
+        # SELECT EXACT MODEL FEATURES
+        # ====================================================
+
+        features = df[
+            self.feature_columns
+        ].copy()
+
 
         return features
 
-    def predict(self, transaction):
+
+    # ========================================================
+    # PREDICT
+    # ========================================================
+
+    def predict(
+        self,
+        transaction
+    ):
+
+        # ----------------------------------------------------
+        # Build features
+        # ----------------------------------------------------
 
         features = self.build_features(
             transaction
         )
+
+
+        # ----------------------------------------------------
+        # Model probability
+        # ----------------------------------------------------
 
         probability = float(
             self.pipeline.predict_proba(
@@ -408,9 +791,32 @@ class LiveRiskPredictor:
             )[0][1]
         )
 
+
+        # ----------------------------------------------------
+        # Numerical safety
+        # ----------------------------------------------------
+
+        probability = max(
+            0.0,
+            min(
+                1.0,
+                probability
+            )
+        )
+
+
+        # ====================================================
+        # RISK SCORE
+        # ====================================================
+
         risk_score = round(
             probability * 100
         )
+
+
+        # ====================================================
+        # RISK SEVERITY
+        # ====================================================
 
         if probability >= 0.75:
 
@@ -428,11 +834,40 @@ class LiveRiskPredictor:
 
             risk_level = "LOW"
 
-        if probability >= 0.05:
 
-            action = "HOLD_AND_INVESTIGATE"
+        # ====================================================
+        # OPERATIONAL ACTION
+        # ====================================================
 
-        elif probability >= 0.02:
+        #
+        # The operating threshold is loaded from:
+        #
+        # reports/fraud_model_metadata.json
+        #
+        # Current optimized threshold:
+        #
+        # 0.30
+        #
+
+        if probability >= 0.75:
+
+            action = (
+                "HOLD_AND_INVESTIGATE"
+            )
+
+        elif (
+            probability
+            >= self.operating_threshold
+        ):
+
+            action = (
+                "STEP_UP_VERIFICATION"
+            )
+
+        elif (
+            probability
+            >= self.operating_threshold * 0.5
+        ):
 
             action = "MONITOR"
 
@@ -440,10 +875,30 @@ class LiveRiskPredictor:
 
             action = "ALLOW"
 
+
+        # ====================================================
+        # RETURN RESULT
+        # ====================================================
+
         return {
-            "fraud_probability": probability,
-            "risk_score": risk_score,
-            "risk_level": risk_level,
-            "recommended_action": action,
-            "features": features.iloc[0].to_dict()
+
+            "fraud_probability":
+                probability,
+
+            "risk_score":
+                risk_score,
+
+            "risk_level":
+                risk_level,
+
+            "recommended_action":
+                action,
+
+            "operating_threshold":
+                self.operating_threshold,
+
+            "features":
+                features.iloc[
+                    0
+                ].to_dict()
         }

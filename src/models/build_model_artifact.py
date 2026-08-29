@@ -191,7 +191,7 @@ def main():
         "categorical_features": categorical_features,
         "roc_auc": float(roc_auc),
         "pr_auc": float(pr_auc),
-        "threshold": 0.05
+        "threshold": 0.30
     }
 
     with open(
@@ -212,7 +212,7 @@ def main():
     print(f"Categorical features: {len(categorical_features)}")
     print(f"ROC-AUC: {roc_auc:.4f}")
     print(f"PR-AUC: {pr_auc:.4f}")
-    print("Operating threshold: 0.05")
+    print("Operating threshold: 0.30")
     print()
     print(f"Model saved to: {MODEL_FILE}")
     print(f"Metadata saved to: {METADATA_FILE}")
