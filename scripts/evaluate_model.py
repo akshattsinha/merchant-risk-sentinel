@@ -12,6 +12,7 @@ from sklearn.metrics import (
     f1_score,
     precision_score,
     recall_score,
+    roc_auc_score,
 )
 
 
@@ -75,6 +76,7 @@ THRESHOLDS = [
 # legitimate transaction that was incorrectly flagged.
 #
 # This is configurable. It is NOT a fraud loss.
+
 FALSE_POSITIVE_INVESTIGATION_COST = 500.0
 
 
@@ -83,12 +85,7 @@ FALSE_POSITIVE_INVESTIGATION_COST = 500.0
 #
 # We use the actual transaction amount as the
 # potential financial exposure.
-#
-# Example:
-# A missed ₹50,000 fraudulent transaction contributes
-# ₹50,000 to false-negative exposure.
-#
-# This is a conservative prototype business-cost model.
+
 FALSE_NEGATIVE_AMOUNT_MULTIPLIER = 1.0
 
 
@@ -146,13 +143,6 @@ def calculate_metrics(
 
     # --------------------------------------------------------
     # False-negative financial cost
-    # --------------------------------------------------------
-    #
-    # For each missed fraudulent transaction, use its
-    # actual transaction amount as the potential exposure.
-    #
-    # FN transactions are:
-    # actual fraud + model predicted legitimate.
     # --------------------------------------------------------
 
     false_negative_mask = (
@@ -793,6 +783,93 @@ test_pr_auc = (
 
 
 # ============================================================
+# TEST ROC-AUC
+# ============================================================
+
+test_roc_auc = (
+    roc_auc_score(
+        y_test,
+        test_probabilities,
+    )
+)
+
+
+# ============================================================
+# TEST CLASS DISTRIBUTION
+# ============================================================
+
+test_fraud_count = int(
+    y_test.sum()
+)
+
+test_legitimate_count = int(
+    len(y_test)
+    - test_fraud_count
+)
+
+test_fraud_rate = (
+    test_fraud_count
+    / len(y_test)
+    if len(y_test) > 0
+    else 0.0
+)
+
+
+# ============================================================
+# BUSINESS IMPACT COMPARISON
+# ============================================================
+
+baseline_test = calculate_metrics(
+    y_test,
+    test_probabilities,
+    0.50,
+    test_amounts,
+)
+
+optimized_test = final_test
+
+baseline_test_loss = float(
+    baseline_test["expected_loss"]
+)
+
+optimized_test_loss = float(
+    optimized_test["expected_loss"]
+)
+
+loss_reduction = (
+    baseline_test_loss
+    - optimized_test_loss
+)
+
+if baseline_test_loss > 0:
+
+    loss_reduction_percentage = (
+        loss_reduction
+        / baseline_test_loss
+    )
+
+else:
+
+    loss_reduction_percentage = 0.0
+
+
+additional_fraud_detected = (
+    optimized_test["true_positives"]
+    - baseline_test["true_positives"]
+)
+
+additional_false_positives = (
+    optimized_test["false_positives"]
+    - baseline_test["false_positives"]
+)
+
+additional_false_negatives = (
+    optimized_test["false_negatives"]
+    - baseline_test["false_negatives"]
+)
+
+
+# ============================================================
 # PRINT FINAL RESULTS
 # ============================================================
 
@@ -819,6 +896,16 @@ print(
 print(
     f"PR-AUC: "
     f"{test_pr_auc * 100:.2f}%"
+)
+
+print(
+    f"ROC-AUC: "
+    f"{test_roc_auc * 100:.2f}%"
+)
+
+print(
+    f"Fraud rate: "
+    f"{test_fraud_rate * 100:.2f}%"
 )
 
 print(
@@ -854,6 +941,60 @@ print(
 print(
     f"Expected loss: "
     f"₹{final_test['expected_loss']:,.2f}"
+)
+
+
+# ============================================================
+# BUSINESS IMPACT OUTPUT
+# ============================================================
+
+print("\n" + "=" * 70)
+print("BUSINESS IMPACT")
+print("=" * 70)
+
+print(
+    f"\nBaseline threshold: "
+    f"0.50"
+)
+
+print(
+    f"Optimized threshold: "
+    f"{selected_threshold:.2f}"
+)
+
+print(
+    f"\nBaseline expected loss: "
+    f"₹{baseline_test_loss:,.2f}"
+)
+
+print(
+    f"Optimized expected loss: "
+    f"₹{optimized_test_loss:,.2f}"
+)
+
+print(
+    f"Loss reduction: "
+    f"₹{loss_reduction:,.2f}"
+)
+
+print(
+    f"Loss reduction percentage: "
+    f"{loss_reduction_percentage * 100:.2f}%"
+)
+
+print(
+    f"\nAdditional fraud cases detected: "
+    f"{additional_fraud_detected:+,}"
+)
+
+print(
+    f"Change in false positives: "
+    f"{additional_false_positives:+,}"
+)
+
+print(
+    f"Change in false negatives: "
+    f"{additional_false_negatives:+,}"
 )
 
 
@@ -963,6 +1104,18 @@ metrics = {
         "pr_auc":
             float(test_pr_auc),
 
+        "roc_auc":
+            float(test_roc_auc),
+
+        "fraud_rate":
+            float(test_fraud_rate),
+
+        "fraud_count":
+            test_fraud_count,
+
+        "legitimate_count":
+            test_legitimate_count,
+
         "true_positives":
             final_test["true_positives"],
 
@@ -994,6 +1147,44 @@ metrics = {
             final_test[
                 "total_fraud_exposure_missed"
             ],
+    },
+
+    "business_impact": {
+
+        "baseline_threshold":
+            0.50,
+
+        "optimized_threshold":
+            selected_threshold,
+
+        "baseline_expected_loss":
+            baseline_test_loss,
+
+        "optimized_expected_loss":
+            optimized_test_loss,
+
+        "loss_reduction":
+            float(loss_reduction),
+
+        "loss_reduction_percentage":
+            float(
+                loss_reduction_percentage
+            ),
+
+        "additional_fraud_detected":
+            int(
+                additional_fraud_detected
+            ),
+
+        "change_in_false_positives":
+            int(
+                additional_false_positives
+            ),
+
+        "change_in_false_negatives":
+            int(
+                additional_false_negatives
+            ),
     },
 
     "train_start":
@@ -1100,10 +1291,45 @@ print(
 )
 
 print(
-    "\nNext step:"
+    "\nThe evaluation report now includes:"
 )
 
 print(
-    "Update the dashboard to display "
-    "these real evaluation results."
+    "  - Precision"
+)
+
+print(
+    "  - Recall"
+)
+
+print(
+    "  - F1 Score"
+)
+
+print(
+    "  - PR-AUC"
+)
+
+print(
+    "  - ROC-AUC"
+)
+
+print(
+    "  - Fraud prevalence"
+)
+
+print(
+    "  - Confusion matrix"
+)
+
+print(
+    "  - Financial costs"
+)
+
+print(
+    "  - Threshold comparison"
+)
+
+print(
+    "  - Baseline vs optimized impact"
 )

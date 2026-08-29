@@ -178,6 +178,10 @@
     "recall": 0.682261208576998,
     "f1": 0.7407407407407407,
     "pr_auc": 0.8315525944335784,
+    "roc_auc": 0.97357150970922,
+    "fraud_rate": 0.04958438043688382,
+    "fraud_count": 513,
+    "legitimate_count": 9833,
     "true_positives": 350,
     "false_positives": 82,
     "true_negatives": 9751,
@@ -186,6 +190,17 @@
     "false_negative_cost": 3937552.17,
     "expected_loss": 3978552.17,
     "total_fraud_exposure_missed": 3937552.17
+  },
+  "business_impact": {
+    "baseline_threshold": 0.5,
+    "optimized_threshold": 0.3,
+    "baseline_expected_loss": 7179482.479999999,
+    "optimized_expected_loss": 3978552.17,
+    "loss_reduction": 3200930.3099999987,
+    "loss_reduction_percentage": 0.44584415644398917,
+    "additional_fraud_detected": 68,
+    "change_in_false_positives": 63,
+    "change_in_false_negatives": -68
   },
   "train_start": "2026-07-30 16:11:08.734658",
   "train_end": "2026-08-17 16:44:08.734658",
