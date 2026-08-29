@@ -125,35 +125,6 @@ Examples include:
 - Refund behaviour
 - Chargeback behaviour
 
-Some engineered features include:
-
-```text
-log_amount
-customer_transaction_count_before
-customer_avg_amount_before
-amount_vs_customer_average
-merchant_transaction_count_before
-merchant_avg_amount_before
-amount_vs_merchant_average
-payment_method_count_before
-device_customer_count
-ip_customer_count
-address_customer_count
-is_new_account
-is_very_new_account
-refund_to_transaction_ratio
-chargeback_to_transaction_ratio
-refund_amount_ratio
-chargeback_amount_ratio
-seconds_since_customer_transaction
-high_velocity_flag
-very_high_velocity_flag
-location_changed
-device_changed
-ip_changed
-behavioral_risk_signal_count
-```
-
 ## 3. Point-in-Time Feature Engineering
 
 Historical customer and merchant features are calculated using information available **before the transaction being evaluated**.
