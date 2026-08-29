@@ -43,7 +43,8 @@ temp/
 # Model/cache files
 *.pkl
 *.joblib
-*.cachedata/raw/transactions.csv
+*.cache
+data/raw/transactions.csv
 src/api/app_before_graph.py
 src/api/app_before_phase1.py
 src/dashboard_backup.py

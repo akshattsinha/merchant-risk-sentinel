@@ -27,6 +27,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Generate transaction dataset
+        run: |
+          python src/generate_data.py
+
+      - name: Build fraud features
+        run: |
+          python src/features/build_features.py
+
       - name: Build model artifact
         run: |
           python src/models/build_model_artifact.py
