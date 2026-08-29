@@ -1,9 +1,10 @@
+from contextlib import asynccontextmanager
 from pathlib import Path
 import sys
 import uuid
 
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, FiniteFloat
 
 
 # ============================================================
@@ -37,6 +38,29 @@ from src.audit.audit_logger import (
 
 
 # ============================================================
+# GLOBAL MODEL
+# ============================================================
+
+predictor = None
+
+
+# ============================================================
+# APPLICATION LIFESPAN
+# ============================================================
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+
+    global predictor
+
+    predictor = LiveRiskPredictor()
+
+    yield
+
+    predictor = None
+
+
+# ============================================================
 # FASTAPI APPLICATION
 # ============================================================
 
@@ -44,14 +68,8 @@ app = FastAPI(
     title="Merchant Risk Sentinel API",
     description="Real-time merchant fraud risk prediction API",
     version="1.0.0",
+    lifespan=lifespan,
 )
-
-
-# ============================================================
-# GLOBAL MODEL
-# ============================================================
-
-predictor = None
 
 
 # ============================================================
@@ -68,9 +86,8 @@ class TransactionRequest(BaseModel):
         min_length=1
     )
 
-    amount: float = Field(
-        gt=0,
-        finite=True
+    amount: FiniteFloat = Field(
+        gt=0
     )
 
     timestamp: str = Field(
@@ -100,18 +117,6 @@ class TransactionRequest(BaseModel):
     location: str = Field(
         min_length=1
     )
-
-
-# ============================================================
-# MODEL STARTUP
-# ============================================================
-
-@app.on_event("startup")
-def load_model():
-
-    global predictor
-
-    predictor = LiveRiskPredictor()
 
 
 # ============================================================
@@ -165,13 +170,9 @@ def model_info():
         "operating_threshold": 0.30,
 
         "risk_levels": {
-
             "LOW": "< 0.10",
-
             "MEDIUM": "0.10 - 0.39",
-
             "HIGH": "0.40 - 0.74",
-
             "CRITICAL": ">= 0.75",
         },
     }
@@ -206,13 +207,6 @@ def predict(
 
         # ----------------------------------------------------
         # GENERATE ID FOR LIVE TRANSACTION
-        # ----------------------------------------------------
-        #
-        # The incoming API request does not contain a
-        # transaction_id, so we generate one for the
-        # audit trail.
-        #
-        # Existing transaction fields are not modified.
         # ----------------------------------------------------
 
         transaction_data[
@@ -283,12 +277,6 @@ def predict(
 
         # ----------------------------------------------------
         # RISK EVIDENCE
-        # ----------------------------------------------------
-        #
-        # This layer converts the model and behavioral
-        # signals into structured evidence.
-        #
-        # It does not replace the ML prediction.
         # ----------------------------------------------------
 
         evidence = build_risk_evidence(
@@ -439,11 +427,9 @@ def get_transaction_relationships(
             transaction_id
         )
 
-
     except HTTPException:
 
         raise
-
 
     except Exception:
 
