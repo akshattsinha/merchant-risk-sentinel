@@ -278,6 +278,7 @@ def get_incident_transactions(
     incident_id: str,
     df: Optional[pd.DataFrame] = None,
 ) -> pd.DataFrame:
+
     """
     Return all transactions belonging to an incident.
 
@@ -363,8 +364,6 @@ def get_incident_transactions(
     # INC-0017
     #     ↓
     # INC_017
-    #
-    # This handles the difference in zero padding.
     # --------------------------------------------------------
 
     normalized_target = (
@@ -452,6 +451,9 @@ def find_related_transactions(
         if not column:
             continue
 
+        if column not in incident_transactions.columns:
+            continue
+
         incident_values = set(
             _unique_non_empty(
                 incident_transactions[
@@ -536,35 +538,35 @@ def build_relationship_summary(
     )
 
     transaction_column = (
-        columns["transaction_id"]
+        columns.get("transaction_id")
     )
 
     customer_column = (
-        columns["customer_id"]
+        columns.get("customer_id")
     )
 
     device_column = (
-        columns["device_id"]
+        columns.get("device_id")
     )
 
     ip_column = (
-        columns["ip_id"]
+        columns.get("ip_id")
     )
 
     address_column = (
-        columns["address_id"]
+        columns.get("address_id")
     )
 
     amount_column = (
-        columns["amount"]
+        columns.get("amount")
     )
 
     fraud_type_column = (
-        columns["fraud_type"]
+        columns.get("fraud_type")
     )
 
     risk_column = (
-        columns["risk_score"]
+        columns.get("risk_score")
     )
 
     # --------------------------------------------------------
@@ -856,11 +858,30 @@ def build_transaction_relationships(
 
     df = load_incident_analysis()
 
+    # --------------------------------------------------------
+    # EMPTY DATASET
+    # --------------------------------------------------------
+
+    if df.empty:
+
+        return {
+            "found": False,
+            "transaction_id": transaction_id,
+        }
+
+    # --------------------------------------------------------
+    # RESOLVE COLUMNS SAFELY
+    # --------------------------------------------------------
+
     columns = resolve_columns(df)
 
     transaction_column = (
-        columns["transaction_id"]
+        columns.get("transaction_id")
     )
+
+    # --------------------------------------------------------
+    # TRANSACTION ID COLUMN NOT AVAILABLE
+    # --------------------------------------------------------
 
     if not transaction_column:
 
@@ -868,6 +889,10 @@ def build_transaction_relationships(
             "found": False,
             "transaction_id": transaction_id,
         }
+
+    # --------------------------------------------------------
+    # FIND TRANSACTION
+    # --------------------------------------------------------
 
     values = (
         df[transaction_column]
@@ -881,6 +906,10 @@ def build_transaction_relationships(
         == str(transaction_id).strip()
     ]
 
+    # --------------------------------------------------------
+    # TRANSACTION NOT FOUND
+    # --------------------------------------------------------
+
     if transaction_rows.empty:
 
         return {
@@ -888,11 +917,12 @@ def build_transaction_relationships(
             "transaction_id": transaction_id,
         }
 
-    # Find the incident associated with the
-    # transaction, when available.
+    # --------------------------------------------------------
+    # FIND ASSOCIATED INCIDENT
+    # --------------------------------------------------------
 
     incident_column = (
-        columns["incident_id"]
+        columns.get("incident_id")
     )
 
     if incident_column:
@@ -910,6 +940,12 @@ def build_transaction_relationships(
             value
             for value in incident_values
             if value
+            and value.lower()
+            not in {
+                "nan",
+                "none",
+                "null",
+            }
         ]
 
         if incident_values:
@@ -918,18 +954,97 @@ def build_transaction_relationships(
                 incident_values[0]
             )
 
-    return {
-        "found": True,
-        "transaction_id": transaction_id,
-        "customer_count": len(
+    # --------------------------------------------------------
+    # TRANSACTION-LEVEL RELATIONSHIP SUMMARY
+    # --------------------------------------------------------
+
+    customer_column = (
+        columns.get("customer_id")
+    )
+
+    device_column = (
+        columns.get("device_id")
+    )
+
+    ip_column = (
+        columns.get("ip_id")
+    )
+
+    address_column = (
+        columns.get("address_id")
+    )
+
+    transaction_customer_count = (
+        len(
             _unique_non_empty(
                 transaction_rows[
-                    columns["customer_id"]
+                    customer_column
                 ].tolist()
             )
         )
-        if columns["customer_id"]
-        else 0,
+        if customer_column
+        else 0
+    )
+
+    transaction_device_count = (
+        len(
+            _unique_non_empty(
+                transaction_rows[
+                    device_column
+                ].tolist()
+            )
+        )
+        if device_column
+        else 0
+    )
+
+    transaction_ip_count = (
+        len(
+            _unique_non_empty(
+                transaction_rows[
+                    ip_column
+                ].tolist()
+            )
+        )
+        if ip_column
+        else 0
+    )
+
+    transaction_address_count = (
+        len(
+            _unique_non_empty(
+                transaction_rows[
+                    address_column
+                ].tolist()
+            )
+        )
+        if address_column
+        else 0
+    )
+
+    return {
+
+        "found": True,
+
+        "transaction_id": (
+            transaction_id
+        ),
+
+        "customer_count": (
+            transaction_customer_count
+        ),
+
+        "device_count": (
+            transaction_device_count
+        ),
+
+        "ip_count": (
+            transaction_ip_count
+        ),
+
+        "address_count": (
+            transaction_address_count
+        ),
     }
 
 
@@ -960,6 +1075,10 @@ def format_relationship_summary(
         f"₹{summary['connected_exposure']:,.2f}."
     )
 
+
+# ============================================================
+# PUBLIC API
+# ============================================================
 
 __all__ = [
     "load_incident_analysis",
