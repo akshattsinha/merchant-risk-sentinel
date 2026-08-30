@@ -266,27 +266,15 @@ The project includes a dashboard for reviewing risk and investigating suspicious
 
 ## Dashboard Overview
 
-Add your screenshot here:
-
-`docs/images/dashboard-overview.png`
-
 ![Merchant Risk Sentinel Dashboard](docs/images/dashboard-overview.png)
 
 ## Live Risk Prediction
-
-Add your screenshot here:
-
-`docs/images/live-risk-prediction.png`
 
 ![Live Risk Prediction](docs/images/live-risk-prediction.png)
 
 The prediction view should show the fraud probability, risk score, risk level, recommended action, and available evidence.
 
 ## Fraud Relationship Investigation
-
-Add your screenshot here:
-
-`docs/images/fraud-relationship-analysis.png`
 
 ![Fraud Relationship Investigation](docs/images/fraud-relationship-analysis.png)
 
