@@ -1,99 +1,153 @@
 # Merchant Risk Sentinel
 
-### Fraud Detection & Incident Response Platform for Merchants
+### Fraud detection is only useful when it leads to a better decision.
 
-Merchant Risk Sentinel is an end-to-end fraud risk platform designed to help merchants **detect suspicious transactions, understand why they are risky, investigate connected activity, estimate financial exposure, and make human-reviewed decisions**.
+Merchant Risk Sentinel is an end-to-end **fraud detection and investigation platform** built around a simple idea:
 
-Unlike a transaction-only fraud classifier, the system combines machine-learning probability with deterministic behavioral evidence and relationship analysis, then closes the loop through analyst feedback and governed continual learning.
+> A fraud model should not just say *“this looks suspicious.”*  
+> It should help an analyst understand **why**, see **what is connected**, decide **what to do**, and feed that decision back into a controlled learning loop.
+
+The project combines machine-learning risk scoring, point-in-time behavioral features, deterministic evidence, relationship analysis, human review, financial-risk context, and governed continual learning into one workflow.
+
+It is a portfolio/research-grade system, not a production payment processor. The goal is to demonstrate the engineering thinking required to take an ML fraud model beyond a notebook and turn it into a **decision-support system**.
 
 ---
 
-## Why This Project
+## Why I Built This
 
-Fraud detection is not only a classification problem.
-
-A useful merchant risk system must answer four questions:
-
-1. **Is this transaction suspicious?**
-2. **Why is it suspicious?**
-3. **What other entities or transactions are connected to the risk?**
-4. **What should the merchant do next?**
-
-Merchant Risk Sentinel addresses these questions through a layered risk architecture:
+Fraud detection is often presented as a binary classification problem:
 
 ```text
-Transaction
-     ↓
-Point-in-Time Behavioral Features
-     ↓
-ML Fraud Probability
-     ↓
-Deterministic Evidence / Risk Engine
-     ↓
-Relationship Analysis
-     ↓
-Risk Score + Risk Level + Recommendation
-     ↓
-Incident / Financial Exposure
-     ↓
-Human Analyst Decision
-     ↓
-Confirmed Feedback
-     ↓
-SQLite Feedback Store
-     ↓
-Governed Continual Learning
-     ↓
-Candidate Model Evaluation
-     ↓
-Promotion Gate
-     ↓
-Versioned Active Model
+Transaction → Model → Fraud / Not Fraud
+```
+
+That is useful for a benchmark. It is not enough for an analyst sitting in a risk queue.
+
+In a real investigation, the next questions are usually:
+
+- Why did the model flag this transaction?
+- Is the customer's behavior unusual?
+- Has this device, IP, or address appeared elsewhere?
+- Is this an isolated event or part of a larger pattern?
+- Should the merchant allow, review, or hold the transaction?
+- If an analyst disagrees with the model, can that feedback improve the system safely?
+- How do we prevent a newly trained model from silently becoming worse?
+
+Merchant Risk Sentinel was designed around those questions.
+
+The resulting flow is:
+
+```text
+                         ┌──────────────────────┐
+                         │     Transaction      │
+                         └──────────┬───────────┘
+                                    │
+                                    ▼
+                    ┌──────────────────────────────┐
+                    │ Point-in-Time Feature Engine │
+                    │  "What did we know then?"   │
+                    └──────────────┬───────────────┘
+                                   │
+                                   ▼
+                    ┌──────────────────────────────┐
+                    │       ML Fraud Model         │
+                    │    Fraud Probability P(f)    │
+                    └──────────────┬───────────────┘
+                                   │
+                     ┌─────────────┴─────────────┐
+                     ▼                           ▼
+          ┌────────────────────┐      ┌────────────────────┐
+          │ Deterministic      │      │ Relationship       │
+          │ Evidence Engine    │      │ Analysis           │
+          └─────────┬──────────┘      └─────────┬──────────┘
+                    │                           │
+                    └─────────────┬─────────────┘
+                                  ▼
+                     ┌────────────────────────┐
+                     │ Risk Score + Explanation│
+                     │ + Recommended Action    │
+                     └────────────┬───────────┘
+                                  │
+                                  ▼
+                     ┌────────────────────────┐
+                     │ Human Analyst / HITL   │
+                     │ ALLOW / REVIEW / HOLD  │
+                     └────────────┬───────────┘
+                                  │
+                                  ▼
+                     ┌────────────────────────┐
+                     │ Confirmed Feedback     │
+                     │ SQLite Feedback Store  │
+                     └────────────┬───────────┘
+                                  │
+                           threshold reached
+                                  │
+                                  ▼
+                     ┌────────────────────────┐
+                     │ Candidate Retraining   │
+                     └────────────┬───────────┘
+                                  ▼
+                     ┌────────────────────────┐
+                     │ Chronological Holdout  │
+                     │ Candidate vs Active    │
+                     └────────────┬───────────┘
+                                  ▼
+                     ┌────────────────────────┐
+                     │ Promotion Gate         │
+                     │ Promote / Reject       │
+                     └────────────┬───────────┘
+                                  ▼
+                     ┌────────────────────────┐
+                     │ Versioned Active Model │
+                     └────────────────────────┘
 ```
 
 ---
 
-## Core Capabilities
+## What Makes the Project Different
 
-### 1. ML Fraud Detection
+The interesting part of this project is not the choice of classifier.
 
-- HistGradientBoosting fraud classifier
-- 43 model features
-- Fraud probability scoring
-- Operating threshold: `0.30`
-- Categorical handling for features such as payment method and location
-- Exact artifact feature schema enforced by the live predictor
+It is the **system around the classifier**.
 
-### 2. Behavioral Risk Analysis
+### 1. Point-in-time behavioral features
 
-The system derives point-in-time behavioral signals including:
+For fraud, leakage is especially dangerous.
 
-- Transaction amount
-- Customer historical transaction behavior
-- Merchant historical transaction behavior
-- Amount-to-customer and amount-to-merchant ratios
-- Transaction velocity
-- Device/customer relationships
+A transaction should be scored using information that would actually have been available **before that transaction happened**.
+
+The feature pipeline therefore derives historical signals such as:
+
+- customer transaction count before the event
+- customer historical average amount
+- merchant historical average amount
+- transaction velocity
+- device/customer relationships
 - IP/customer relationships
-- Address/customer relationships
-- Payment-method frequency
-- Refund behavior
-- Chargeback behavior
-- Account age
-- Location changes
-- Device changes
+- address/customer relationships
+- payment-method behavior
+- refund and chargeback history
+- account age
+- location changes
+- device changes
 - IP changes
-- Time-of-day and day-of-week behavior
-- High and very-high velocity flags
-- Behavioral risk signal count
+- time-of-day and day-of-week behavior
+- amount anomalies
+- behavioral risk signal count
 
-Historical values are calculated using information available **before the transaction being evaluated**, preventing future transaction information from being used as a prediction feature.
+The timestamp is used to establish temporal context, not as a shortcut for the model.
 
-### 3. Deterministic Evidence Engine
+This matters because a random train/test split can make a fraud model look excellent while allowing future information to influence the past.
 
-ML probability is supplemented by bounded, explainable evidence signals.
+---
 
-Current evidence weights include:
+### 2. ML probability is not the final decision
+
+The model produces a probability of fraud.
+
+That probability is only one input into the operational risk decision.
+
+The platform adds a deterministic evidence layer containing interpretable signals such as:
 
 | Evidence | Weight |
 |---|---:|
@@ -108,113 +162,36 @@ Current evidence weights include:
 | Shared IP | 8 |
 | Shared address | 6 |
 
-The dashboard risk fusion keeps the ML model primary while allowing deterministic evidence to make a bounded adjustment.
-
-### 4. Relationship Evidence
-
-The platform investigates connections across:
+The evidence adjustment is deliberately **bounded**:
 
 ```text
-Customer ↔ Device
-Customer ↔ IP
-Customer ↔ Address
-Merchant ↔ Transaction behavior
+ML score = fraud_probability × 100
+
+Evidence adjustment = min(evidence_score × 0.15, 15)
+
+Final score = min(100, ML score + evidence adjustment)
 ```
 
-This allows an analyst to distinguish a suspicious transaction from a potentially suspicious **network of related activity**.
+This keeps the ML model primary while allowing transparent evidence to influence the operational score.
 
-### 5. Human-in-the-Loop Investigation
-
-The AI does not make the final operational decision automatically.
-
-Analysts can review a transaction and select:
-
-- `ALLOW`
-- `REVIEW`
-- `HOLD`
-
-Investigation outcomes can be:
-
-- `CONFIRMED_FRAUD`
-- `CONFIRMED_LEGITIMATE`
-- `INCONCLUSIVE`
-
-Feedback is persisted to SQLite and becomes eligible for future governed retraining.
-
-### 6. Continual Learning with Promotion Governance
-
-The system does **not** retrain after every transaction.
-
-The current workflow requires a minimum of **10 confirmed feedback labels** before retraining.
+That separation is intentional:
 
 ```text
-Analyst Feedback
-      ↓
-SQLite
-      ↓
-10-label threshold
-      ↓
-Training dataset
-      ↓
-Chronological 80/20 holdout
-      ↓
-Candidate model
-      ↓
-Candidate metrics
-      ↓
-Active-model metrics
-      ↓
-Promotion gate
-      ↓
-Promote / Reject
+Model:
+"What is the estimated probability of fraud?"
+
+Risk engine:
+"What evidence supports or challenges that assessment?"
+
+Decision layer:
+"What should the merchant do?"
 ```
-
-The promotion gate is designed to reject a candidate only when **both PR-AUC and F1 materially degrade beyond the configured tolerance**.
-
-### 7. Model Versioning & Atomic Promotion
-
-Promoted models are versioned using identifiers such as:
-
-```text
-v20260903164428
-```
-
-The active model is recorded in:
-
-```text
-reports/active_model.json
-```
-
-Versioned artifacts are stored under:
-
-```text
-reports/model_versions/<version>/
-```
-
-Promotion uses atomic file replacement so the live artifact is not left partially updated.
-
-### 8. Maintenance Worker
-
-Docker Compose includes a dedicated maintenance service that executes the continual-learning worker every six hours.
-
-It can skip retraining safely when the feedback threshold has not been reached.
-
-### 9. API + Dashboard
-
-- FastAPI backend
-- Streamlit analyst dashboard
-- Live prediction endpoint
-- Feedback endpoint
-- Learning/retraining endpoint
-- Learning status endpoint
-- Model metadata endpoint
-- Dockerized deployment
 
 ---
 
-## Risk Decision Model
+## Risk Decisioning
 
-The live API exposes four risk levels:
+The API exposes model-level risk bands:
 
 | Fraud Probability | Risk Level |
 |---:|---|
@@ -223,11 +200,9 @@ The live API exposes four risk levels:
 | `0.40 – 0.74` | HIGH |
 | `>= 0.75` | CRITICAL |
 
-The dashboard additionally combines ML probability with bounded deterministic evidence to produce the final operational risk decision.
+The dashboard converts the fused risk score into an operational action:
 
-Dashboard action thresholds are:
-
-| Final Score | Level | Action |
+| Final Score | Risk Level | Action |
 |---:|---|---|
 | `>= 80` | CRITICAL | HOLD |
 | `>= 60` | HIGH | HOLD |
@@ -235,160 +210,354 @@ Dashboard action thresholds are:
 | `>= 20` | LOW | MONITOR |
 | `< 20` | LOW | ALLOW |
 
-The distinction between **model probability** and **operational risk decision** is intentional: the ML model estimates fraud likelihood, while the risk engine incorporates explainable behavioral evidence for merchant operations.
+The distinction between **prediction** and **decisioning** is important.
+
+A model can be statistically strong while a business policy built around it is poorly calibrated. Keeping the two layers separate makes the system easier to reason about, test, and change.
 
 ---
 
-## Model Evaluation
+## Relationship Analysis
 
-The initial model was evaluated before continual-learning validation and achieved approximately:
+Fraud is not always a property of one transaction.
+
+Sometimes the useful signal is the relationship between entities.
+
+Merchant Risk Sentinel looks for connections such as:
 
 ```text
-ROC-AUC: 0.9716
-PR-AUC:  0.8081
-Threshold: 0.30
-Features: 43
+Customer ───── Device
+    │
+    ├────────── IP
+    │
+    └────────── Address
 ```
 
-The continual-learning pipeline was subsequently exercised using controlled analyst-feedback test cases.
+This lets an analyst investigate questions such as:
 
-During the promotion test:
+- Has another customer used this device?
+- Is the IP shared across multiple customers?
+- Is the address associated with multiple accounts?
+- Does the current transaction form part of a suspicious cluster?
 
-| Metric | Active Model | Candidate Model |
-|---|---:|---:|
-| ROC-AUC | 0.9731 | 0.9628 |
-| PR-AUC | 0.8197 | 0.8456 |
-| F1 | 0.7014 | 0.7723 |
-|
+The objective is to move from:
 
-The candidate was promoted because PR-AUC and F1 improved and the configured promotion gate was not triggered.
+```text
+"This transaction looks risky."
+```
 
-The promoted version was:
+toward:
+
+```text
+"This transaction looks risky, and here is the surrounding evidence."
+```
+
+---
+
+# Human-in-the-Loop
+
+I intentionally did **not** make the AI the final authority.
+
+An analyst can choose:
+
+```text
+ALLOW
+REVIEW
+HOLD
+```
+
+and classify the investigation as:
+
+```text
+CONFIRMED_FRAUD
+CONFIRMED_LEGITIMATE
+INCONCLUSIVE
+```
+
+The system records the decision alongside the original AI recommendation.
+
+That makes it possible to measure:
+
+```text
+AI recommendation
+        ↓
+Human decision
+        ↓
+Agreement / Override
+        ↓
+Confirmed outcome
+```
+
+This is more useful than simply storing a `0/1` label because it preserves the context of the human-machine interaction.
+
+---
+
+# Continual Learning — With a Promotion Gate
+
+A common mistake in "continual learning" demos is:
+
+```text
+New feedback → retrain → overwrite production model
+```
+
+Merchant Risk Sentinel deliberately does not do that.
+
+The current workflow requires a minimum of **10 confirmed labels** before retraining.
+
+```text
+Analyst Feedback
+       │
+       ▼
+SQLite Feedback Store
+       │
+       ├── insufficient labels → SKIP
+       │
+       ▼
+Candidate Training
+       │
+       ▼
+Chronological 80/20 Holdout
+       │
+       ├───────────────┐
+       ▼               ▼
+Candidate Model    Active Model
+       │               │
+       └───────┬───────┘
+               ▼
+        Same Holdout Set
+               │
+               ▼
+        Promotion Gate
+          │         │
+       PASS        FAIL
+          │         │
+          ▼         ▼
+      Promote      Reject
+```
+
+### Why the gate exists
+
+A candidate can improve one metric and damage another.
+
+For example, a model might achieve better recall by producing many more false positives.
+
+The promotion logic therefore compares the candidate against the currently active model using:
+
+- ROC-AUC
+- PR-AUC
+- F1
+
+The configured promotion tolerance is `2%`.
+
+The candidate is rejected when both PR-AUC and F1 materially degrade beyond that tolerance.
+
+The active model is never replaced simply because retraining completed successfully.
+
+---
+
+# Temporal Validation
+
+The continual-learning pipeline uses a chronological holdout rather than a random split.
+
+Conceptually:
+
+```text
+Older transactions ────────────────► Newer transactions
+|                                   |
+|         Training data             | Holdout
+|                                   |
+└───────────────────────────────────┘
+```
+
+The timestamp is used for ordering only.
+
+It is **not** passed to the model as one of the 43 model features.
+
+This is a small implementation detail with a large consequence: it makes the evaluation closer to the real question the system eventually has to answer:
+
+> "How well will this model perform on transactions it has not seen yet?"
+
+---
+
+# Model Versioning and Safe Promotion
+
+Every promoted continual-learning model gets a unique version.
+
+Example:
 
 ```text
 v20260903164428
 ```
 
-### Important validation note
+The system maintains:
 
-The continual-learning promotion test used controlled `CL_TEST_*` feedback records to exercise the retraining pipeline. Those synthetic feedback records were subsequently removed from the feedback database. The promoted artifact remains available as the validated continual-learning model version.
+```text
+reports/
+├── fraud_model.joblib
+├── fraud_model_metadata.json
+├── active_model.json
+└── model_versions/
+    └── v20260903164428/
+        ├── fraud_model.joblib
+        └── metadata.json
+```
 
-These test labels should therefore be described as **controlled validation data**, not production merchant feedback.
+Promotion uses atomic file replacement so the active artifact is not left in a partially updated state.
+
+The validated active artifact and its versioned registry copy were also checked using SHA-256 and produced the same hash:
+
+```text
+b60b67329a40e880f5f541ab962ee1e7b4ca81080496d720cc498252506f00ee
+```
+
+This gives the model lifecycle a basic chain of custody:
+
+```text
+Train
+  ↓
+Evaluate
+  ↓
+Version
+  ↓
+Promote atomically
+  ↓
+Record active version
+  ↓
+Reload live predictor
+```
 
 ---
 
-## Example Live Prediction
+# Validation Results
 
-A controlled existing-customer test was used to validate the behavioral pipeline.
+The initial fraud model achieved:
 
-The transaction used a new device while keeping the customer's historical context, merchant, amount, IP, address, location, and payment method.
+```text
+ROC-AUC       0.9716
+PR-AUC        0.8081
+Threshold     0.30
+Features      43
+```
 
-The live API successfully returned:
+The continual-learning pipeline was then exercised using controlled validation feedback.
+
+### Candidate vs Active
+
+| Metric | Active | Candidate |
+|---|---:|---:|
+| ROC-AUC | 0.9731 | 0.9628 |
+| PR-AUC | 0.8197 | **0.8456** |
+| F1 | 0.7014 | **0.7723** |
+
+The candidate was promoted because the metrics relevant to the configured promotion gate improved rather than materially degrading.
+
+The resulting active model version is:
+
+```text
+v20260903164428
+```
+
+### Important note about the validation data
+
+The continual-learning test used controlled `CL_TEST_*` records to exercise the feedback → retraining → evaluation → promotion path.
+
+Those synthetic validation records were subsequently removed from the feedback database.
+
+The promoted model remains as the validated artifact.
+
+They should therefore **not** be interpreted as production merchant feedback.
+
+---
+
+# End-to-End Live Test
+
+The live API was tested with an existing customer while introducing a changed device.
+
+The test kept the customer's historical context and changed only the relevant behavioral condition.
+
+The API returned:
 
 ```text
 HTTP 200
-Model: v20260903164428
-Features: 43
-Risk level: LOW
-Recommendation: MONITOR
-Behavioral signal: Device change
+Model version:       v20260903164428
+Feature count:       43
+Risk level:          LOW
+Recommendation:      MONITOR
+Behavioral signal:   Device change
 ```
 
-The response contained explainable evidence including:
+The response also contained explainable evidence:
 
 ```text
-Device change → HIGH severity evidence
+Device change
+    ↓
+HIGH severity evidence
 ```
 
-This demonstrates the separation between:
+This test is useful because it demonstrates that the deployed system can:
 
-- ML fraud probability
-- behavioral evidence
-- operational risk decision
-- human analyst action
+1. construct behavioral features,
+2. load the active model,
+3. score a live transaction,
+4. generate deterministic evidence,
+5. expose relationship context,
+6. return an operational recommendation,
+7. preserve the model version used for the decision.
 
 ---
 
-## API Endpoints
+# Architecture
 
-### Health
-
-```http
-GET /health
+```text
+                         ┌──────────────────────┐
+                         │      Streamlit       │
+                         │   Analyst Dashboard  │
+                         └──────────┬───────────┘
+                                    │
+                                    ▼
+                         ┌──────────────────────┐
+                         │       FastAPI        │
+                         │  Prediction / HITL   │
+                         └──────────┬───────────┘
+                                    │
+                    ┌───────────────┼────────────────┐
+                    │               │                │
+                    ▼               ▼                ▼
+             ┌────────────┐ ┌──────────────┐ ┌──────────────┐
+             │ ML Model   │ │ Evidence     │ │ Relationship │
+             │ Predictor  │ │ Risk Engine  │ │ Analysis     │
+             └─────┬──────┘ └──────┬───────┘ └──────┬───────┘
+                   │               │                │
+                   └───────────────┼────────────────┘
+                                   ▼
+                         ┌──────────────────────┐
+                         │  Risk Decision +     │
+                         │  Explanation         │
+                         └──────────┬───────────┘
+                                    │
+                                    ▼
+                         ┌──────────────────────┐
+                         │ Analyst Feedback     │
+                         │ SQLite               │
+                         └──────────┬───────────┘
+                                    │
+                          every 6h maintenance
+                                    │
+                                    ▼
+                         ┌──────────────────────┐
+                         │ Continual Learner    │
+                         │ Candidate Training   │
+                         └──────────┬───────────┘
+                                    │
+                                    ▼
+                         ┌──────────────────────┐
+                         │ Promotion Gate       │
+                         │ + Model Registry     │
+                         └──────────────────────┘
 ```
-
-Returns service and model health.
-
-### Root
-
-```http
-GET /
-```
-
-Returns API information.
-
-### Model Information
-
-```http
-GET /model-info
-```
-
-Returns the active model version, feature count, threshold, learning mode, and risk levels.
-
-### Fraud Prediction
-
-```http
-POST /predict
-```
-
-Accepts a transaction and returns:
-
-- fraud probability
-- risk score
-- risk level
-- recommendation
-- behavioral features
-- evidence
-- relationship evidence
-- model version
-- human-in-the-loop options
-
-### Analyst Feedback
-
-```http
-POST /feedback
-```
-
-Stores analyst-confirmed outcomes and associated transaction/features for future learning.
-
-### Retraining
-
-```http
-POST /learning/retrain
-```
-
-Runs the governed retraining workflow when the feedback threshold is met.
-
-### Learning Status
-
-```http
-GET /learning/status
-```
-
-Returns:
-
-- feedback count
-- confirmed fraud count
-- confirmed legitimate count
-- AI acceptance/override statistics
-- agreement rate
-- active model version
-- retraining threshold
-- learning readiness
 
 ---
 
-## Project Structure
+# Project Structure
 
 ```text
 merchant-risk-sentinel/
@@ -405,8 +574,7 @@ merchant-risk-sentinel/
 │   ├── learning/
 │   │   └── continual_learner.py
 │   │
-│   └── dashboard/
-│       └── ...
+│   └── dashboard.py
 │
 ├── data/
 │   ├── processed/
@@ -419,7 +587,6 @@ merchant-risk-sentinel/
 │   ├── fraud_model_metadata.json
 │   ├── active_model.json
 │   └── model_versions/
-│       └── <version>/
 │
 ├── tests/
 ├── Dockerfile
@@ -430,41 +597,68 @@ merchant-risk-sentinel/
 
 ---
 
-## Technology Stack
+# API
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| `GET` | `/` | API information |
+| `GET` | `/health` | Service/model health |
+| `GET` | `/model-info` | Active model metadata |
+| `POST` | `/predict` | Score a transaction |
+| `POST` | `/feedback` | Store analyst feedback |
+| `POST` | `/learning/retrain` | Run governed retraining |
+| `GET` | `/learning/status` | Inspect learning state |
+
+A prediction can include:
+
+- fraud probability
+- risk score
+- risk level
+- recommendation
+- behavioral features
+- evidence
+- relationship evidence
+- model version
+- human-in-the-loop options
+
+---
+
+# Technology Stack
 
 | Layer | Technology |
 |---|---|
 | Language | Python |
 | ML | scikit-learn |
 | Model | HistGradientBoostingClassifier |
-| Data Processing | Pandas / NumPy |
+| Data | Pandas / NumPy |
 | API | FastAPI |
 | Dashboard | Streamlit |
-| Persistence | SQLite |
-| Model Serialization | Joblib |
+| Feedback Store | SQLite |
+| Serialization | Joblib |
 | Testing | Pytest |
 | Deployment | Docker / Docker Compose |
-| Model Governance | Custom promotion/versioning pipeline |
 
 ---
 
-## Running Locally
+# Running the Project
 
-### 1. Clone the repository
+## Local
+
+### 1. Clone
 
 ```bash
 git clone <your-repository-url>
 cd merchant-risk-sentinel
 ```
 
-### 2. Create a virtual environment
+### 2. Create an environment
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 ```
 
-On Windows:
+Windows:
 
 ```powershell
 .venv\Scripts\activate
@@ -476,19 +670,19 @@ On Windows:
 pip install -r requirements.txt
 ```
 
-### 4. Run the API
+### 4. Start the API
 
 ```bash
 uvicorn src.api.app:app --host 0.0.0.0 --port 8000
 ```
 
-### 5. Run the dashboard
+### 5. Start the dashboard
 
 ```bash
-streamlit run src/dashboard/app.py --server.address 0.0.0.0 --server.port 8501
+streamlit run src/dashboard.py --server.address 0.0.0.0 --server.port 8501
 ```
 
-The default local interfaces are:
+Open:
 
 ```text
 API:       http://localhost:8000
@@ -497,21 +691,21 @@ Dashboard: http://localhost:8501
 
 ---
 
-## Running with Docker Compose
+# Docker Compose
 
-Build and start the complete stack:
+Run the full stack:
 
 ```bash
 docker compose up --build -d
 ```
 
-Check service status:
+Check the services:
 
 ```bash
 docker compose ps
 ```
 
-The stack contains:
+The deployment contains:
 
 ```text
 merchant-risk-api
@@ -519,7 +713,9 @@ merchant-risk-dashboard
 merchant-risk-maintenance
 ```
 
-Stop the stack:
+The maintenance worker runs the continual-learning process every six hours.
+
+Stop everything:
 
 ```bash
 docker compose down
@@ -527,9 +723,9 @@ docker compose down
 
 ---
 
-## Testing
+# Testing
 
-Run the complete test suite:
+Run the full test suite:
 
 ```bash
 pytest -q
@@ -541,272 +737,177 @@ Current validated result:
 44 passed
 ```
 
-The project currently emits NumPy/joblib deprecation warnings during some live-predictor tests. These warnings do not cause test failures.
+The current suite also produces NumPy/joblib deprecation warnings in some live-predictor tests. They do not cause test failures.
 
 ---
 
-## Continual Learning Workflow
+# Operational Safety and Governance
 
-The continual-learning implementation is intentionally conservative.
+The project intentionally includes controls that are easy to miss in a basic ML demo:
 
-### Feedback collection
+- **Point-in-time feature construction** to reduce temporal leakage
+- **Human-confirmed labels** rather than blindly learning from model predictions
+- **Minimum feedback threshold** before retraining
+- **Chronological holdout evaluation**
+- **Candidate vs active comparison**
+- **Promotion tolerance**
+- **Versioned model artifacts**
+- **Atomic model promotion**
+- **Retraining lock**
+- **Model registry retention**
+- **Active model metadata**
+- **Maintenance status reporting**
+- **Human override of AI recommendations**
 
-Each analyst decision records:
+The principle is simple:
 
-- transaction ID
-- label
-- ground truth
-- AI recommendation
-- human decision
-- final decision
-- reason
-- investigation notes
-- transaction context
-- behavioral features
-- model version
-- prediction information when available
-
-### Retraining threshold
-
-The default threshold is:
-
-```text
-10 confirmed labels
-```
-
-Below the threshold, retraining is skipped.
-
-Example:
-
-```json
-{
-  "status": "skipped",
-  "reason": "Need 10 feedback labels; have 2."
-}
-```
-
-### Chronological validation
-
-Training rows are ordered using their transaction timestamps before the 80/20 holdout is created.
-
-The timestamp is used for **ordering only** and is not passed to the model as one of the 43 model features.
-
-This is important for fraud systems because a random split can allow temporal leakage and produce an unrealistically optimistic estimate of future performance.
-
-### Candidate evaluation
-
-A candidate model is compared against the currently active model on the same chronological holdout.
-
-The candidate is promoted only if it satisfies the configured promotion rule.
-
-### Versioned promotion
-
-A successful promotion creates:
-
-```text
-reports/model_versions/<version>/fraud_model.joblib
-reports/model_versions/<version>/metadata.json
-```
-
-and updates:
-
-```text
-reports/fraud_model.joblib
-reports/fraud_model_metadata.json
-reports/active_model.json
-```
-
-The active artifact and promoted registry artifact were independently verified to have matching SHA-256 hashes for the validated version.
+> **Training a new model is not the same as earning the right to deploy it.**
 
 ---
 
-## Model Governance Principles
+# What I Would Do Next for Production
 
-Merchant Risk Sentinel treats model deployment as a governed process rather than simply overwriting a model file.
+This project deliberately stops short of pretending to be a production payment-risk engine.
 
-Key controls include:
+If I were taking it further, the next engineering priorities would be:
 
-- Human-confirmed labels
-- Minimum feedback threshold
-- Chronological validation
-- Candidate-vs-active evaluation
-- Promotion tolerance
-- Model versioning
-- Active model metadata
-- Atomic promotion
-- File-based retraining lock
-- Registry retention
-- Live model reload support
-- Maintenance status reporting
+### Risk / ML
 
-This architecture is intended to reduce the risk of silently deploying a degraded model.
+- probability calibration
+- cost-sensitive threshold optimization
+- merchant-specific thresholds
+- precision/recall by fraud type
+- fraud-loss-weighted evaluation
+- temporal backtesting across multiple windows
+- model drift and feature drift detection
+- shadow evaluation before promotion
+- automated rollback
+
+### Data
+
+- larger and more representative fraud labels
+- label-delay handling
+- stronger feature-store semantics
+- entity-level graph features
+- robust handling of missing and delayed signals
+
+### Platform
+
+- distributed feedback storage
+- authenticated APIs
+- role-based analyst access
+- immutable audit logs
+- production job orchestration
+- monitoring and alerting
+- model registry integration
+- observability for latency, errors, drift, and decision outcomes
+
+### Decisioning
+
+- configurable merchant policies
+- reason codes with stable taxonomy
+- review queues
+- case management
+- SLA-aware prioritization
+- expected-loss based decisioning
+
+That is the direction I would take the prototype if the objective were to move from **“fraud model”** to a real **risk decisioning platform**.
 
 ---
 
-## Fraud Risk → Merchant Action
+# Key Engineering Takeaways
 
-The platform translates model output into an operational workflow:
+### Fraud detection
+A supervised ML model can estimate fraud probability from transaction and behavioral data.
 
-```text
-LOW
-  ↓
-MONITOR / ALLOW
+### Risk engineering
+The probability becomes more useful when paired with deterministic, inspectable evidence.
 
-MEDIUM
-  ↓
-REVIEW
-
-HIGH
-  ↓
-HOLD
-
-CRITICAL
-  ↓
-HOLD
-```
-
-The final action remains reviewable by a human analyst.
-
----
-
-## Key Design Decisions
-
-### ML + deterministic evidence
-
-Pure ML probability is useful but not sufficient for investigation. The deterministic layer provides transparent reasons for risk signals.
-
-### Point-in-time features
-
-Historical behavioral features are calculated from information available before the transaction being scored.
-
-### Bounded evidence adjustment
-
-Deterministic evidence can influence the operational score without completely replacing the ML model.
+### Explainability
+An analyst should be able to understand the signals behind a decision instead of receiving a black-box score alone.
 
 ### Human-in-the-loop
+Human overrides are not treated as noise; they are structured feedback.
 
-Analysts can override AI recommendations and provide structured outcomes that feed the learning pipeline.
+### Continual learning
+Feedback can improve the model, but retraining and deployment are separate controlled steps.
 
-### Governed continual learning
+### MLOps
+Model versioning, evaluation, promotion, locking, metadata, and atomic replacement make model lifecycle management explicit.
 
-The model does not automatically retrain after every transaction. Feedback must reach a threshold, a candidate must be evaluated, and the promotion gate must pass.
-
-### Versioned models
-
-Every promoted continual-learning model receives a unique version so model evolution can be audited.
-
----
-
-## Limitations & Future Improvements
-
-This is a prototype/portfolio-grade risk platform rather than a production payment processor.
-
-Potential next improvements include:
-
-- Larger and more representative labeled fraud datasets
-- Better calibration of predicted probabilities
-- Cost-sensitive evaluation based on merchant loss
-- Precision/recall monitoring by merchant and fraud type
-- Model drift detection
-- Feature drift monitoring
-- Automated rollback to a previous model version
-- Stronger immutable audit logs
-- Role-based analyst access
-- Authentication and authorization
-- Distributed feedback storage
-- Production-grade job scheduling
-- Real payment-gateway integrations
-- Alerting and notification workflows
-- More extensive temporal backtesting
-- Shadow evaluation before promotion
+### Temporal correctness
+Fraud evaluation must respect time. Preventing leakage is more important than producing an impressive random-split metric.
 
 ---
 
-## What This Project Demonstrates
-
-Merchant Risk Sentinel demonstrates practical ML engineering beyond model training:
-
-**Fraud Detection**
-
-Builds a supervised fraud model using behavioral transaction features.
-
-**Risk Engineering**
-
-Combines probabilistic ML output with deterministic evidence.
-
-**Explainability**
-
-Surfaces concrete risk factors and relationship evidence to analysts.
-
-**Human-in-the-Loop AI**
-
-Allows analysts to accept, override, and classify AI decisions.
-
-**Continual Learning**
-
-Uses confirmed feedback to train candidate models after a defined threshold.
-
-**Model Governance**
-
-Evaluates candidates against the active model before promotion.
-
-**Temporal Validation**
-
-Uses chronological holdout evaluation instead of relying only on random splitting.
-
-**MLOps**
-
-Uses versioned artifacts, atomic promotion, locks, metadata, and maintenance workers.
-
-**Production-Oriented Architecture**
-
-Runs API, dashboard, and maintenance services through Docker Compose.
-
----
-
-## Validation Snapshot
+# Validation Snapshot
 
 ```text
-──────────────────────────────────────────────
- MERCHANT RISK SENTINEL — VALIDATION SNAPSHOT
-──────────────────────────────────────────────
-
-Automated tests             44 passed
-Model features              43
-Model type                  HistGradientBoosting
-Operating threshold         0.30
-
-Initial model ROC-AUC       0.9716
-Initial model PR-AUC        0.8081
-
-Candidate ROC-AUC           0.9628
-Candidate PR-AUC            0.8456
-Candidate F1                0.7723
-
-Promotion result             PROMOTED
-Active version               v20260903164428
-
-API health                  HEALTHY
-Model loaded                YES
-Human-in-the-loop            YES
-Continual learning           ENABLED
-Docker services              3 / 3 UP
-
-──────────────────────────────────────────────
+┌─────────────────────────────────────────────────────┐
+│              MERCHANT RISK SENTINEL                 │
+├─────────────────────────────────────────────────────┤
+│ Automated tests              44 passed              │
+│ Model                         HistGradientBoosting   │
+│ Model features               43                     │
+│ Operating threshold           0.30                  │
+│                                                     │
+│ Initial ROC-AUC               0.9716                │
+│ Initial PR-AUC                0.8081                │
+│                                                     │
+│ Candidate ROC-AUC             0.9628                │
+│ Candidate PR-AUC              0.8456                │
+│ Candidate F1                  0.7723                │
+│                                                     │
+│ Promotion result              PROMOTED              │
+│ Active version                v20260903164428       │
+│                                                     │
+│ API health                    HEALTHY               │
+│ Model loaded                  YES                   │
+│ Human-in-the-loop             YES                   │
+│ Continual learning            ENABLED               │
+│ Docker services               3 / 3 UP              │
+└─────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Author
+# A Note on Scope
 
-**Akshat Sinha**
+Merchant Risk Sentinel uses a controlled fraud dataset and validation scenarios. It is **not** claiming production-level fraud performance, real merchant loss reduction, or deployment at payment-network scale.
 
+The purpose of the project is to demonstrate the engineering path from:
+
+```text
+ML model
+   ↓
+behavioral intelligence
+   ↓
+risk evidence
+   ↓
+human decisioning
+   ↓
+feedback
+   ↓
+controlled model improvement
+   ↓
+governed deployment
+```
+
+That distinction matters.
+
+A strong fraud system is not just a model with a high ROC-AUC. It is a system that can make decisions, explain them, learn from the right feedback, and fail safely when the model changes.
+
+---
+
+# Author
+
+**Akshat Sinha**  
 B.Tech — Computer Science & Engineering
 
-Built as an AI risk engineering project focused on fraud detection, explainability, human-in-the-loop decision making, and governed continual learning.
+Built as an AI risk engineering project focused on fraud detection, decisioning, explainability, human-in-the-loop systems, continual learning, and model governance.
 
 ---
 
 ## License
 
-Add the project's chosen license here before publishing the repository.
+Add the project's chosen license before publishing the repository.
