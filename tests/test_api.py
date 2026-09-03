@@ -46,7 +46,7 @@ def test_root_endpoint():
 
     assert data["status"] == "online"
 
-    assert data["version"] == "1.0.0"
+    assert data["version"] == "1.2.0"
 
 
 # ============================================================

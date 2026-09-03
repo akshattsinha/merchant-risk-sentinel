@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
+import json
 import sys
 import uuid
 
@@ -38,6 +39,17 @@ from src.audit.audit_logger import (
 
 
 # ============================================================
+# CONTINUAL LEARNING IMPORTS
+# ============================================================
+
+from src.learning.continual_learner import (
+    record_feedback,
+    learning_status,
+    retrain_if_needed,
+)
+
+
+# ============================================================
 # GLOBAL MODEL
 # ============================================================
 
@@ -53,7 +65,12 @@ async def lifespan(app: FastAPI):
 
     global predictor
 
-    predictor = LiveRiskPredictor()
+    try:
+        predictor = LiveRiskPredictor()
+
+    except Exception:
+        predictor = None
+        raise
 
     yield
 
@@ -66,8 +83,12 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Merchant Risk Sentinel API",
-    description="Real-time merchant fraud risk prediction API",
-    version="1.0.0",
+    description=(
+        "Real-time merchant fraud risk prediction, "
+        "human-in-the-loop investigation, and "
+        "feedback-driven continual learning API"
+    ),
+    version="1.2.0",
     lifespan=lifespan,
 )
 
@@ -120,6 +141,109 @@ class TransactionRequest(BaseModel):
 
 
 # ============================================================
+# CONTINUAL LEARNING FEEDBACK REQUEST
+# ============================================================
+
+class FeedbackRequest(BaseModel):
+
+    # --------------------------------------------------------
+    # Transaction ID
+    # --------------------------------------------------------
+
+    transaction_id: str = Field(
+        min_length=1
+    )
+
+    # --------------------------------------------------------
+    # Machine-learning label
+    #
+    # 1 = confirmed fraud
+    # 0 = confirmed legitimate
+    # --------------------------------------------------------
+
+    label: int = Field(
+        ge=0,
+        le=1
+    )
+
+    # --------------------------------------------------------
+    # Ground-truth investigation outcome
+    # --------------------------------------------------------
+
+    ground_truth: str = Field(
+        min_length=1
+    )
+
+    # --------------------------------------------------------
+    # What the AI recommended
+    # --------------------------------------------------------
+
+    ai_recommendation: str = Field(
+        min_length=1
+    )
+
+    # --------------------------------------------------------
+    # What the analyst actually decided
+    # --------------------------------------------------------
+
+    human_decision: str = Field(
+        min_length=1
+    )
+
+    # --------------------------------------------------------
+    # Existing final decision field
+    #
+    # Kept for compatibility.
+    # --------------------------------------------------------
+
+    final_decision: str = Field(
+        min_length=1
+    )
+
+    # --------------------------------------------------------
+    # Reason for decision
+    # --------------------------------------------------------
+
+    reason: str = Field(
+        min_length=3
+    )
+
+    # --------------------------------------------------------
+    # Additional investigation notes
+    # --------------------------------------------------------
+
+    investigation_notes: str = ""
+
+    # --------------------------------------------------------
+    # Original transaction
+    # --------------------------------------------------------
+
+    transaction: dict = Field(
+        default_factory=dict
+    )
+
+    # --------------------------------------------------------
+    # Point-in-time behavioral features
+    # --------------------------------------------------------
+
+    features: dict = Field(
+        default_factory=dict
+    )
+
+    # --------------------------------------------------------
+    # Model metadata
+    # --------------------------------------------------------
+
+    model_version: str | None = None
+
+    fraud_probability: FiniteFloat | None = None
+
+    risk_score: FiniteFloat | None = None
+
+    risk_level: str | None = None
+
+
+# ============================================================
 # ROOT
 # ============================================================
 
@@ -129,7 +253,7 @@ def root():
     return {
         "service": "Merchant Risk Sentinel",
         "status": "online",
-        "version": "1.0.0",
+        "version": "1.2.0",
     }
 
 
@@ -160,21 +284,75 @@ def model_info():
             detail="Prediction model is not loaded.",
         )
 
+    metadata = {}
+
+    metadata_file = (
+        PROJECT_ROOT
+        / "reports"
+        / "fraud_model_metadata.json"
+    )
+
+    try:
+
+        if metadata_file.exists():
+
+            metadata = json.loads(
+                metadata_file.read_text(
+                    encoding="utf-8"
+                )
+            )
+
+    except Exception:
+
+        metadata = {}
+
+    model_version = (
+        metadata.get("model_version")
+        or metadata.get("version")
+        or "initial-model"
+    )
+
     return {
-        "model": "HistGradientBoosting",
+
+        "model": metadata.get(
+            "model",
+            "HistGradientBoosting",
+        ),
 
         "artifact": (
             "reports/fraud_model.joblib"
         ),
 
-        "operating_threshold": 0.30,
+        "model_version": model_version,
+
+        "feature_count": metadata.get(
+            "feature_count",
+            43,
+        ),
+
+        "operating_threshold": metadata.get(
+            "threshold",
+            0.30,
+        ),
+
+        "learning_mode": (
+            "feedback_driven_continual_learning"
+        ),
+
+        "human_in_the_loop": True,
 
         "risk_levels": {
+
             "LOW": "< 0.10",
+
             "MEDIUM": "0.10 - 0.39",
+
             "HIGH": "0.40 - 0.74",
+
             "CRITICAL": ">= 0.75",
+
         },
+
     }
 
 
@@ -197,6 +375,18 @@ def predict(
     try:
 
         # ----------------------------------------------------
+        # CHECK FOR NEWLY PROMOTED MODEL
+        # ----------------------------------------------------
+
+        if hasattr(
+            predictor,
+            "reload_if_changed",
+        ):
+
+            predictor.reload_if_changed()
+
+
+        # ----------------------------------------------------
         # CONVERT REQUEST TO DICTIONARY
         # ----------------------------------------------------
 
@@ -206,16 +396,14 @@ def predict(
 
 
         # ----------------------------------------------------
-        # GENERATE ID FOR LIVE TRANSACTION
+        # GENERATE LIVE TRANSACTION ID
         # ----------------------------------------------------
 
         transaction_data[
             "transaction_id"
         ] = (
             "TXN_LIVE_"
-            + uuid.uuid4()
-            .hex[:12]
-            .upper()
+            + uuid.uuid4().hex[:12].upper()
         )
 
 
@@ -261,6 +449,7 @@ def predict(
                 result[
                     "recommended_action"
                 ],
+
         }
 
 
@@ -269,9 +458,7 @@ def predict(
         # ----------------------------------------------------
 
         behavioral_features = (
-            result[
-                "features"
-            ]
+            result["features"]
         )
 
 
@@ -288,6 +475,46 @@ def predict(
 
 
         # ----------------------------------------------------
+        # GET MODEL VERSION
+        # ----------------------------------------------------
+
+        model_version = "initial-model"
+
+        try:
+
+            metadata_file = (
+                PROJECT_ROOT
+                / "reports"
+                / "fraud_model_metadata.json"
+            )
+
+            if metadata_file.exists():
+
+                metadata = json.loads(
+                    metadata_file.read_text(
+                        encoding="utf-8"
+                    )
+                )
+
+                model_version = (
+                    metadata.get(
+                        "model_version"
+                    )
+                    or metadata.get(
+                        "version"
+                    )
+                    or model_version
+                )
+
+        except Exception:
+
+            # Metadata problems must not
+            # break prediction.
+
+            pass
+
+
+        # ----------------------------------------------------
         # AUDIT TRAIL
         # ----------------------------------------------------
 
@@ -295,7 +522,7 @@ def predict(
             transaction=transaction_data,
             risk=risk,
             evidence=evidence,
-            model_version="1.0.0",
+            model_version=model_version,
             threshold=0.30,
             incident_id=None,
         )
@@ -320,6 +547,46 @@ def predict(
 
             "evidence":
                 evidence,
+
+            "model": {
+
+                "version":
+                    model_version,
+
+                "learning_mode": (
+                    "feedback_driven_"
+                    "continual_learning"
+                ),
+
+            },
+
+            "human_feedback": {
+
+                "required": True,
+
+                "ai_recommendation":
+                    risk[
+                        "recommended_action"
+                    ],
+
+                "available_decisions": [
+
+                    "ALLOW",
+                    "REVIEW",
+                    "HOLD",
+
+                ],
+
+                "investigation_outcomes": [
+
+                    "CONFIRMED_FRAUD",
+                    "CONFIRMED_LEGITIMATE",
+                    "INCONCLUSIVE",
+
+                ],
+
+            },
+
         }
 
 
@@ -330,13 +597,422 @@ def predict(
 
     except Exception:
 
-        # Do not expose internal Python exceptions,
-        # model paths, stack traces, or implementation
-        # details to API clients.
+        # Do not expose internal exceptions.
 
         raise HTTPException(
             status_code=500,
             detail="Prediction failed.",
+        )
+
+
+# ============================================================
+# CONTINUAL LEARNING — SUBMIT FEEDBACK
+# ============================================================
+
+@app.post("/feedback")
+def submit_feedback(
+    request: FeedbackRequest,
+):
+
+    try:
+
+        # ----------------------------------------------------
+        # NORMALIZE VALUES
+        # ----------------------------------------------------
+
+        ground_truth = (
+            request.ground_truth
+            .strip()
+            .upper()
+        )
+
+        ai_recommendation = (
+            request.ai_recommendation
+            .strip()
+            .upper()
+        )
+
+        human_decision = (
+            request.human_decision
+            .strip()
+            .upper()
+        )
+
+        final_decision = (
+            request.final_decision
+            .strip()
+            .upper()
+        )
+
+
+        # ----------------------------------------------------
+        # VALID GROUND TRUTH VALUES
+        # ----------------------------------------------------
+
+        allowed_ground_truth = {
+
+            "CONFIRMED_FRAUD",
+
+            "CONFIRMED_LEGITIMATE",
+
+            "INCONCLUSIVE",
+
+        }
+
+        if ground_truth not in (
+            allowed_ground_truth
+        ):
+
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "ground_truth must be "
+                    "CONFIRMED_FRAUD, "
+                    "CONFIRMED_LEGITIMATE, "
+                    "or INCONCLUSIVE."
+                ),
+            )
+
+
+        # ----------------------------------------------------
+        # VALID OPERATIONAL DECISIONS
+        # ----------------------------------------------------
+
+        allowed_decisions = {
+
+            "ALLOW",
+            "REVIEW",
+            "HOLD",
+
+        }
+
+
+        if human_decision not in (
+            allowed_decisions
+        ):
+
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "human_decision must be "
+                    "ALLOW, REVIEW, or HOLD."
+                ),
+            )
+
+
+        if ai_recommendation not in (
+            allowed_decisions
+        ):
+
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "ai_recommendation must be "
+                    "ALLOW, REVIEW, or HOLD."
+                ),
+            )
+
+
+        if final_decision not in (
+            allowed_decisions
+        ):
+
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "final_decision must be "
+                    "ALLOW, REVIEW, or HOLD."
+                ),
+            )
+
+
+        # ----------------------------------------------------
+        # INCONCLUSIVE CASE
+        #
+        # IMPORTANT:
+        #
+        # Do NOT train the model on uncertain feedback.
+        # ----------------------------------------------------
+
+        if ground_truth == "INCONCLUSIVE":
+
+            return {
+
+                "status": "success",
+
+                "feedback": {
+
+                    "status":
+                        "not_used_for_training",
+
+                    "transaction_id":
+                        request.transaction_id,
+
+                    "ground_truth":
+                        ground_truth,
+
+                    "ai_recommendation":
+                        ai_recommendation,
+
+                    "human_decision":
+                        human_decision,
+
+                    "final_decision":
+                        final_decision,
+
+                    "reason":
+                        request.reason,
+
+                    "investigation_notes":
+                        request.investigation_notes,
+
+                },
+
+                "learning":
+                    learning_status(),
+
+            }
+
+
+        # ----------------------------------------------------
+        # DERIVE LABEL FROM CONFIRMED GROUND TRUTH
+        # ----------------------------------------------------
+
+        if (
+            ground_truth
+            == "CONFIRMED_FRAUD"
+        ):
+
+            expected_label = 1
+
+        else:
+
+            expected_label = 0
+
+
+        # ----------------------------------------------------
+        # VERIFY CLIENT LABEL
+        # ----------------------------------------------------
+
+        if request.label != expected_label:
+
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "label does not match "
+                    "ground_truth."
+                ),
+            )
+
+
+        # ----------------------------------------------------
+        # STORE CONFIRMED FEEDBACK
+        # ----------------------------------------------------
+
+        result = record_feedback(
+
+            transaction_id=(
+                request.transaction_id
+            ),
+
+            label=expected_label,
+
+            ground_truth=(
+                ground_truth
+            ),
+
+            ai_recommendation=(
+                ai_recommendation
+            ),
+
+            human_decision=(
+                human_decision
+            ),
+
+            final_decision=(
+                final_decision
+            ),
+
+            reason=(
+                request.reason
+            ),
+
+            investigation_notes=(
+                request.investigation_notes
+            ),
+
+            transaction=(
+                request.transaction
+            ),
+
+            features=(
+                request.features
+            ),
+
+            model_version=(
+                request.model_version
+            ),
+
+            fraud_probability=(
+                request.fraud_probability
+            ),
+
+            risk_score=(
+                request.risk_score
+            ),
+
+            risk_level=(
+                request.risk_level
+            ),
+
+        )
+
+
+        # ----------------------------------------------------
+        # CURRENT LEARNING STATUS
+        # ----------------------------------------------------
+
+        current_learning_status = (
+            learning_status()
+        )
+
+
+        # ----------------------------------------------------
+        # RETURN
+        # ----------------------------------------------------
+
+        return {
+
+            "status":
+                "success",
+
+            "feedback":
+                result,
+
+            "learning":
+                current_learning_status,
+
+        }
+
+
+    except HTTPException:
+
+        raise
+
+
+    except ValueError as exc:
+
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        )
+
+
+    except Exception:
+
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to store feedback.",
+        )
+
+
+# ============================================================
+# CONTINUAL LEARNING — STATUS
+# ============================================================
+
+@app.get("/learning/status")
+def get_learning_status():
+
+    try:
+
+        return {
+
+            "status":
+                "success",
+
+            "learning":
+                learning_status(),
+
+        }
+
+    except Exception:
+
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Unable to retrieve "
+                "learning status."
+            ),
+        )
+
+
+# ============================================================
+# CONTINUAL LEARNING — RETRAIN
+# ============================================================
+
+@app.post("/learning/retrain")
+def retrain_model():
+
+    global predictor
+
+    try:
+
+        result = retrain_if_needed(
+            min_feedback=10,
+            force=False,
+        )
+
+
+        # ----------------------------------------------------
+        # RELOAD MODEL AFTER PROMOTION
+        # ----------------------------------------------------
+
+        if (
+            result.get("status")
+            == "promoted"
+        ):
+
+            if predictor is not None:
+
+                if hasattr(
+                    predictor,
+                    "reload_if_changed",
+                ):
+
+                    predictor.reload_if_changed(
+                        force=True
+                    )
+
+                else:
+
+                    predictor = (
+                        LiveRiskPredictor()
+                    )
+
+
+        # ----------------------------------------------------
+        # RETURN RESULT
+        # ----------------------------------------------------
+
+        return {
+
+            "status":
+                "success",
+
+            "result":
+                result,
+
+            "learning":
+                learning_status(),
+
+        }
+
+
+    except Exception:
+
+        raise HTTPException(
+            status_code=500,
+            detail="Model retraining failed.",
         )
 
 
@@ -366,8 +1042,10 @@ def get_incident_relationships(
 
     try:
 
-        result = build_relationship_summary(
-            incident_id
+        result = (
+            build_relationship_summary(
+                incident_id
+            )
         )
 
 
@@ -423,13 +1101,17 @@ def get_transaction_relationships(
 
     try:
 
-        result = build_transaction_relationships(
-            transaction_id
+        result = (
+            build_transaction_relationships(
+                transaction_id
+            )
         )
+
 
     except HTTPException:
 
         raise
+
 
     except Exception:
 

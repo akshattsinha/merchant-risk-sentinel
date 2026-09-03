@@ -1,0 +1,6 @@
+{
+  "version": "v20260903164428",
+  "model_path": "reports/fraud_model.joblib",
+  "metadata_path": "reports/fraud_model_metadata.json",
+  "promoted_at": "2026-09-03T16:44:28.358447+00:00"
+}

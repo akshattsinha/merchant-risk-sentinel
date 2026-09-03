@@ -1,0 +1,8 @@
+{
+  "status": "waiting",
+  "reason": "not_enough_feedback",
+  "feedback_count": 0,
+  "minimum_required": 10,
+  "model_version": "initial-model",
+  "checked_at": "2026-09-03T06:29:11.899689+00:00"
+}

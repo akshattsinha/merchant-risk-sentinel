@@ -14,6 +14,8 @@ from chatbot.fraud_assistant import (
     build_dashboard_context,
 )
 
+from learning.continual_learner import learning_status
+
 
 # ============================================================
 # PAGE CONFIG
@@ -5160,17 +5162,46 @@ def calculate_live_risk_decision(prediction, transaction):
     evidence_reasons = []
 
     # High-confidence deterministic signals.
+    ffactor_scores = {
+    # Weak behavioral signals
+    "Device change": 3,
+    "IP change": 4,
+    "Location change": 4,
+
+    # Stronger transaction anomalies
+    "Amount anomaly": 8,
+    "Merchant amount anomaly": 4,
+
+    # Velocity is more indicative of automated/abusive activity
+    "High velocity": 8,
+    "Very high velocity": 12,
+
+    # Relationship-based signals
+    "Shared device": 8,
+    "Shared IP address": 8,
+    "Shared address": 6,
+}
+        # ------------------------------------------------------------
+    # DETERMINISTIC EVIDENCE WEIGHTS
+    # ------------------------------------------------------------
+    # A new device is a weak signal by itself.
+    # Stronger weights are reserved for behavioral anomalies
+    # and suspicious relationships.
+
     factor_scores = {
-        "Device change": 10,
-        "IP change": 10,
-        "Location change": 10,
-        "Amount anomaly": 12,
-        "Merchant amount anomaly": 6,
-        "High velocity": 10,
-        "Very high velocity": 15,
-        "Shared device": 12,
-        "Shared IP address": 12,
-        "Shared address": 10,
+        "Device change": 3,
+        "IP change": 4,
+        "Location change": 4,
+
+        "Amount anomaly": 8,
+        "Merchant amount anomaly": 4,
+
+        "High velocity": 8,
+        "Very high velocity": 12,
+
+        "Shared device": 8,
+        "Shared IP address": 8,
+        "Shared address": 6,
     }
 
     for factor in factors:
@@ -5258,9 +5289,23 @@ def calculate_live_risk_decision(prediction, transaction):
 
     # Transparent fusion: preserve the ML model as the primary signal
     # while allowing independent deterministic evidence to increase risk.
-    final_score = (
-        (ml_probability * 100.0 * 0.60)
-        + (evidence_score * 0.40)
+    
+    ml_score = max(
+        0.0,
+        min(
+            100.0,
+            ml_probability * 100.0,
+        ),
+    )
+
+    evidence_adjustment = min(
+        evidence_score * 0.15,
+        15.0,
+    )
+
+    final_score = min(
+        100.0,
+        ml_score + evidence_adjustment,
     )
 
     final_score = max(
@@ -5315,264 +5360,759 @@ def render_human_in_loop_decision(
     prediction,
     transaction,
 ):
-    decision = calculate_live_risk_decision(
-        prediction,
-        transaction,
+    """
+    Human-in-the-Loop decision layer.
+
+    Separates:
+    1. AI/model recommendation
+    2. Human operational decision
+    3. Confirmed ground truth
+
+    Only confirmed fraud / confirmed legitimate outcomes
+    are sent to the continual-learning system.
+
+    INCONCLUSIVE outcomes are audit-only and are NOT
+    converted into training labels.
+    """
+
+    transaction_id = transaction.get(
+        "transaction_id",
+        prediction.get("transaction", {}).get(
+            "transaction_id",
+            "UNKNOWN",
+        ),
     )
+
+    risk = prediction.get("risk", {})
+
+    fraud_probability = float(
+        risk.get("fraud_probability", 0.0)
+    )
+
+    fraud_probability_percent = float(
+        risk.get(
+            "fraud_probability_percent",
+            fraud_probability * 100,
+        )
+    )
+
+    risk_score = float(
+        risk.get("risk_score", 0)
+    )
+
+    risk_level = risk.get(
+        "risk_level",
+        "UNKNOWN",
+    )
+
+    recommended_action = risk.get(
+        "recommended_action",
+        "ALLOW",
+    )
+
+    behavioral_features = prediction.get(
+        "behavioral_features",
+        {},
+    )
+
+    evidence = prediction.get(
+        "evidence",
+        {},
+    )
+
+    # ============================================================
+    # EXISTING RISK DECISION ENGINE
+    # ============================================================
 
     try:
-        amount = float(
-            transaction.get(
-                "amount",
-                0.0,
-            )
+        decision = calculate_live_risk_decision(
+            prediction,
+            transaction,
         )
-    except (TypeError, ValueError):
-        amount = 0.0
+    except Exception:
+        decision = {
+            "recommended_action": recommended_action,
+            "risk_level": risk_level,
+            "risk_score": risk_score,
+            "fraud_probability": fraud_probability,
+            "fraud_probability_percent": fraud_probability_percent,
+        }
 
-    exposure_at_risk = (
-        decision["ml_probability"]
-        * max(
-            amount,
-            0.0,
+    if isinstance(decision, dict):
+        recommended_action = decision.get(
+            "recommended_action",
+            recommended_action,
+        )
+
+    exposure_at_risk = float(
+        transaction.get(
+            "amount",
+            0,
         )
     )
 
-    st.divider()
-
-    st.subheader(
-        "🎯 Risk Decision Engine"
-    )
-
-    st.caption(
-        "The existing ML model is combined with live deterministic "
-        "evidence. The system recommends a defensive action; the "
-        "merchant or risk analyst makes the final decision."
-    )
-
-    c1, c2, c3, c4 = st.columns(
-        4,
-        gap="medium",
-    )
-
-    with c1:
-        visible_metric(
-            "ML Risk",
-            f"{decision['ml_score']:.2f}/100",
-        )
-
-    with c2:
-        visible_metric(
-            "Evidence Risk",
-            f"{decision['evidence_score']:.2f}/100",
-        )
-
-    with c3:
-        visible_metric(
-            "Final Risk",
-            f"{decision['final_score']:.2f}/100",
-        )
-
-    with c4:
-        visible_metric(
-            "Exposure at Risk",
-            format_currency(
-                exposure_at_risk
-            ),
-        )
-
-    recommendation_col, evidence_col = st.columns(
-        2,
-        gap="large",
-    )
-
-    with recommendation_col:
-
-        st.markdown(
-            "### 🤖 Model Recommendation"
-        )
-
-        st.info(
-            f"**{decision['recommended_action']}**"
-        )
-
-        st.write(
-            f"Final risk level: **{decision['risk_level']}**"
-        )
-
-        st.caption(
-            "This is a recommendation only. No payment action is "
-            "automatically executed."
-        )
-
-    with evidence_col:
-
-        st.markdown(
-            "### 📌 Decision Evidence"
-        )
-
-        evidence_rows = [
-            {
-                "Component": "ML Risk",
-                "Score": f"{decision['ml_score']:.2f}/100",
-            },
-            {
-                "Component": "Deterministic Evidence",
-                "Score": f"{decision['evidence_score']:.2f}/100",
-            },
-            {
-                "Component": "Relationship Evidence",
-                "Score": f"{decision['relationship_points']:.2f}",
-            },
-        ]
-
-        st.dataframe(
-            pd.DataFrame(
-                evidence_rows
-            ),
-            width="stretch",
-            hide_index=True,
-        )
-
-    if decision["evidence_reasons"]:
-
-        st.markdown(
-            "#### Why the evidence score increased"
-        )
-
-        reason_rows = [
-            {
-                "Signal": item["factor"],
-                "Value": item["value"],
-                "Severity": item["severity"],
-                "Risk Points": item["score"],
-            }
-            for item in decision["evidence_reasons"]
-        ]
-
-        st.dataframe(
-            pd.DataFrame(
-                reason_rows
-            ),
-            width="stretch",
-            hide_index=True,
-        )
+    # ============================================================
+    # HEADER
+    # ============================================================
 
     st.markdown(
-        "### 👤 Merchant / Analyst Final Decision"
+    """
+    <div style="
+        padding:18px;
+        border-radius:12px;
+        border:1px solid rgba(128,128,128,0.25);
+        margin-top:20px;
+        margin-bottom:15px;
+        background:#ffffff;
+    ">
+        <h3 style="margin:0; color:#111827;">
+            🎯 Risk Decision & Human Review
+        </h3>
+        <p style="margin-top:8px; color:#475569;">
+            The ML system provides a recommendation.
+            A human analyst provides the final operational decision.
+        </p>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
+
+    # ============================================================
+    # AI RECOMMENDATION
+    # ============================================================
+
+    # ============================================================
+# AI RECOMMENDATION
+# ============================================================
+
+    # ============================================================
+    # HEADER
+    # ============================================================
+
+    st.subheader("🎯 Risk Decision & Human Review")
+
+    st.caption(
+        "The ML system provides a recommendation. "
+        "A human analyst provides the final operational decision."
     )
 
-    transaction_id = str(
-        transaction.get(
-            "transaction_id",
-            "unknown",
+    # ============================================================
+    # AI RECOMMENDATION
+    # ============================================================
+
+    st.markdown("### 🤖 Model Recommendation")
+
+    # Read directly from prediction.
+    # This avoids depending on variables outside the function scope.
+
+    display_risk = prediction.get("risk", {}) or {}
+
+    display_fraud_probability = float(
+        display_risk.get("fraud_probability", 0.0) or 0.0
+    )
+
+    display_fraud_probability_percent = float(
+        display_risk.get(
+            "fraud_probability_percent",
+            display_fraud_probability * 100,
+        ) or 0.0
+    )
+
+    display_risk_score = float(
+        display_risk.get("risk_score", 0.0) or 0.0
+    )
+
+    display_risk_level = str(
+        display_risk.get("risk_level", "UNKNOWN")
+    )
+
+    display_recommended_action = str(
+        display_risk.get("recommended_action", "ALLOW")
+    )
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    with col1:
+        visible_metric(
+            "Fraud Probability",
+            f"{display_fraud_probability_percent:.2f}%",
         )
+
+    with col2:
+        visible_metric(
+            "Risk Score",
+            f"{display_risk_score:.0f}",
+        )
+
+    with col3:
+        visible_metric(
+            "Risk Level",
+            display_risk_level,
+        )
+
+    with col4:
+        visible_metric(
+            "Recommended Action",
+            display_recommended_action,
+        )
+
+    st.caption(
+        "This is the model recommendation, not the final human decision."
     )
 
-    with st.form(
-        "human_decision_form_" + transaction_id,
-        clear_on_submit=False,
-    ):
+    # ============================================================
+    # FINANCIAL EXPOSURE
+    # ============================================================
 
-        final_decision = st.radio(
-            "Choose the final action",
-            [
-                "ALLOW",
-                "REVIEW",
-                "HOLD",
-            ],
+    st.markdown("### 💰 Financial Exposure")
+
+    exposure_col1, exposure_col2 = st.columns(2)
+
+    with exposure_col1:
+        visible_metric(
+            "Transaction Amount",
+            f"₹{exposure_at_risk:,.2f}",
+        )
+
+    with exposure_col2:
+        expected_loss = (
+            exposure_at_risk * display_fraud_probability
+        )
+
+        visible_metric(
+            "Expected Loss",
+            f"₹{expected_loss:,.2f}",
+        )
+
+    # ============================================================
+    # RISK EVIDENCE
+    # ============================================================
+
+    st.markdown("### 🔎 Decision Evidence")
+
+    risk_factors = evidence.get(
+        "risk_factors",
+        [],
+    )
+
+    relationship_evidence = evidence.get(
+        "relationship_evidence",
+        {},
+    )
+
+    if not isinstance(relationship_evidence, dict):
+        relationship_evidence = {}
+
+    if risk_factors:
+        st.warning(
+            f"{len(risk_factors)} risk factor(s) detected."
+        )
+
+        for factor in risk_factors:
+            if isinstance(factor, dict):
+                factor_name = factor.get(
+                    "name",
+                    factor.get(
+                        "factor",
+                        "Risk factor",
+                    ),
+                )
+
+                factor_description = factor.get(
+                    "description",
+                    factor.get(
+                        "reason",
+                        "",
+                    ),
+                )
+
+                st.markdown(
+                    f"**{factor_name}**"
+                )
+
+                if factor_description:
+                    st.caption(
+                        factor_description
+                    )
+
+            else:
+                st.markdown(
+                    f"- {factor}"
+                )
+    else:
+        st.success(
+            "No deterministic risk factors were triggered."
+        )
+
+    # ============================================================
+    # RELATIONSHIP EVIDENCE
+    # ============================================================
+
+    if relationship_evidence:
+        st.markdown(
+            "#### 🔗 Relationship Evidence"
+        )
+
+        rel_col1, rel_col2, rel_col3 = st.columns(3)
+
+        with rel_col1:
+            visible_metric(
+                "Customers / Device",
+                str(
+                    relationship_evidence.get(
+                        "device_customer_count",
+                        0,
+                    )
+                ),
+            )
+
+        with rel_col2:
+            visible_metric(
+                "Customers / IP",
+                str(
+                    relationship_evidence.get(
+                        "ip_customer_count",
+                        0,
+                    )
+                ),
+            )
+
+        with rel_col3:
+            visible_metric(
+                "Customers / Address",
+                str(
+                    relationship_evidence.get(
+                        "address_customer_count",
+                        0,
+                    )
+                ),
+            )
+
+    # ============================================================
+    # CONTINUAL LEARNING STATUS
+    # ============================================================
+
+    st.markdown("### 🧠 Continual Learning")
+
+    try:
+        current_learning_status = learning_status()
+
+        total_feedback = int(
+            current_learning_status.get(
+                "total_feedback",
+                0,
+            )
+        )
+
+        confirmed_fraud = int(
+            current_learning_status.get(
+                "confirmed_fraud",
+                0,
+            )
+        )
+
+        confirmed_legitimate = int(
+            current_learning_status.get(
+                "confirmed_legitimate",
+                0,
+            )
+        )
+
+        minimum_feedback = int(
+            current_learning_status.get(
+                "minimum_feedback_for_retraining",
+                10,
+            )
+        )
+
+        active_model = current_learning_status.get(
+            "active_model"
+        )
+
+    except Exception:
+        total_feedback = 0
+        confirmed_fraud = 0
+        confirmed_legitimate = 0
+        minimum_feedback = 10
+        active_model = None
+
+            # ============================================================
+    # CONTINUAL LEARNING METRICS
+    # ============================================================
+
+    learning_cols = st.columns(4)
+
+    with learning_cols[0]:
+        visible_metric(
+            "Confirmed Labels",
+            str(total_feedback),
+        )
+
+    with learning_cols[1]:
+        visible_metric(
+            "Confirmed Fraud",
+            str(confirmed_fraud),
+        )
+
+    with learning_cols[2]:
+        visible_metric(
+            "Confirmed Legitimate",
+            str(confirmed_legitimate),
+        )
+
+    with learning_cols[3]:
+        visible_metric(
+            "Active Model",
+            str(active_model) if active_model else "Current",
+        )
+
+    remaining_labels = max(
+        minimum_feedback - total_feedback,
+        0,
+    )
+
+    if remaining_labels > 0:
+        st.info(
+            f"Continual learning needs "
+            f"{remaining_labels} more confirmed label(s) "
+            f"before the next retraining evaluation."
+        )
+    else:
+        st.success(
+            "Retraining threshold reached. "
+            "The maintenance worker can evaluate a candidate model."
+        )
+
+    # ============================================================
+    # HUMAN DECISION
+    # ============================================================
+
+    st.markdown("### 👤 Analyst Decision")
+
+    st.info(
+        "Choose the operational action independently from the model recommendation."
+    )
+
+    form_key = (
+        f"human_decision_form_{transaction_id}"
+    )
+
+    action_options = [
+        "ALLOW",
+        "REVIEW",
+        "HOLD",
+    ]
+
+    default_index = (
+        action_options.index(recommended_action)
+        if recommended_action in action_options
+        else 1
+    )
+
+    with st.form(form_key):
+
+        human_decision = st.radio(
+            "Final operational action",
+            action_options,
+            index=default_index,
             horizontal=True,
-            key="final_decision_" + transaction_id,
         )
 
         decision_reason = st.text_area(
-            "Decision reason",
+            "Analyst decision reason",
             placeholder=(
-                "Example: Customer verified the transaction manually."
+                "Explain why you accepted, reviewed, "
+                "or held this transaction."
             ),
-            key="decision_reason_" + transaction_id,
         )
 
-        confirm = st.form_submit_button(
-            "CONFIRM FINAL DECISION",
-            width="stretch",
+        # ========================================================
+        # GROUND TRUTH
+        # ========================================================
+
+        st.markdown("### 🏷️ Ground Truth")
+
+        st.caption(
+            "Ground truth is separate from the operational decision. "
+            "Only confirmed outcomes are used for model learning."
         )
 
-    if confirm:
+        ground_truth = st.radio(
+            "What is the final outcome of this transaction?",
+            [
+                "INCONCLUSIVE",
+                "CONFIRMED_FRAUD",
+                "CONFIRMED_LEGITIMATE",
+            ],
+            index=0,
+        )
 
-        if not decision_reason.strip():
+        ground_truth_reason = st.text_area(
+            "Ground-truth evidence / investigation notes",
+            placeholder=(
+                "Example: confirmed by customer, "
+                "chargeback received, manual investigation, etc."
+            ),
+        )
 
-            st.error(
-                "Enter a decision reason before confirming."
-            )
+        submitted = st.form_submit_button(
+            "Submit Decision",
+            use_container_width=True,
+        )
 
-        else:
+    # ============================================================
+    # SUBMISSION
+    # ============================================================
 
-            if "risk_decision_audit" not in st.session_state:
-                st.session_state[
-                    "risk_decision_audit"
-                ] = []
+    if submitted:
 
+        timestamp = datetime.utcnow().isoformat()
+
+        # ========================================================
+        # OPERATIONAL AUDIT RECORD
+        # ========================================================
+
+        audit_record = {
+            "timestamp": timestamp,
+            "transaction_id": transaction_id,
+            "model_recommendation": recommended_action,
+            "model_risk_level": risk_level,
+            "model_risk_score": risk_score,
+            "fraud_probability": fraud_probability,
+            "fraud_probability_percent": (
+                fraud_probability_percent
+            ),
+            "human_decision": human_decision,
+            "decision_reason": decision_reason,
+            "ground_truth": ground_truth,
+            "ground_truth_reason": ground_truth_reason,
+        }
+
+        if "risk_decision_audit" not in st.session_state:
             st.session_state[
                 "risk_decision_audit"
-            ].append(
-                {
-                    "timestamp": pd.Timestamp.now().strftime(
-                        "%Y-%m-%d %H:%M:%S"
-                    ),
-                    "transaction_id": transaction_id,
-                    "ml_risk": decision["ml_score"],
-                    "evidence_risk": decision["evidence_score"],
-                    "final_risk": decision["final_score"],
-                    "model_recommendation": decision[
-                        "recommended_action"
-                    ],
-                    "final_decision": final_decision,
-                    "decision_reason": decision_reason.strip(),
-                }
+            ] = []
+
+        st.session_state[
+            "risk_decision_audit"
+        ].append(
+            audit_record
+        )
+
+        # ========================================================
+        # CONTINUAL LEARNING FEEDBACK
+        # ========================================================
+        #
+        # Operational action is NOT ground truth.
+        #
+        # HOLD does not automatically mean fraud.
+        # REVIEW does not automatically mean fraud.
+        # ALLOW does not automatically mean legitimate.
+        #
+        # Only confirmed ground truth enters training.
+        #
+        # INCONCLUSIVE is intentionally excluded.
+        # ========================================================
+
+        feedback_submitted = False
+
+        if ground_truth in [
+            "CONFIRMED_FRAUD",
+            "CONFIRMED_LEGITIMATE",
+        ]:
+
+            label = (
+                1
+                if ground_truth == "CONFIRMED_FRAUD"
+                else 0
             )
 
-            st.success(
-                f"Final decision recorded: **{final_decision}**"
+            feedback_payload = {
+    "transaction_id": transaction_id,
+    "label": label,
+    "ground_truth": ground_truth,
+    "ai_recommendation": recommended_action,
+    "human_decision": human_decision,
+    "final_decision": human_decision,
+    "reason": (
+        ground_truth_reason
+        or decision_reason
+        or "Analyst-confirmed outcome"
+    ),
+    "transaction": transaction,
+    "features": behavioral_features,
+}
+
+            try:
+                feedback_response = requests.post(
+                    f"{API_URL}/feedback",
+                    json=feedback_payload,
+                    timeout=30,
+                )
+
+                feedback_response.raise_for_status()
+
+                feedback_submitted = True
+
+            except Exception as exc:
+                st.error(
+                    "Could not submit feedback to the "
+                    f"continual-learning service: {exc}"
+                )
+
+        # ========================================================
+        # RESULT
+        # ========================================================
+
+        if feedback_submitted:
+
+            if ground_truth == "CONFIRMED_FRAUD":
+                st.success(
+                    "Confirmed fraud label recorded. "
+                    "The transaction is now available for continual learning."
+                )
+            else:
+                st.success(
+                    "Confirmed legitimate label recorded. "
+                    "The transaction is now available for continual learning."
+                )
+
+        elif ground_truth == "INCONCLUSIVE":
+
+            st.info(
+                "Operational decision recorded. "
+                "Because the outcome is inconclusive, "
+                "this transaction will NOT be used for model training."
             )
 
-    audit_records = st.session_state.get(
+        # ========================================================
+        # AI VS HUMAN VS GROUND TRUTH
+        # ========================================================
+
+        st.markdown(
+            "### 📊 AI vs Human vs Ground Truth"
+        )
+
+        comparison_col1, comparison_col2, comparison_col3 = st.columns(3)
+
+        with comparison_col1:
+            st.markdown(
+                "**🤖 AI Recommendation**"
+            )
+
+            st.write(
+                recommended_action
+            )
+
+        with comparison_col2:
+            st.markdown(
+                "**👤 Human Decision**"
+            )
+
+            st.write(
+                human_decision
+            )
+
+        with comparison_col3:
+            st.markdown(
+                "**🏷️ Ground Truth**"
+            )
+
+            st.write(
+                ground_truth
+            )
+
+        # ========================================================
+        # REFRESH LEARNING STATUS
+        # ========================================================
+
+        try:
+
+            updated_learning_status = learning_status()
+
+            updated_feedback_count = int(
+                updated_learning_status.get(
+                    "total_feedback",
+                    0,
+                )
+            )
+
+            updated_minimum = int(
+                updated_learning_status.get(
+                    "minimum_feedback_for_retraining",
+                    10,
+                )
+            )
+
+            if updated_feedback_count >= updated_minimum:
+
+                st.warning(
+                    "Retraining threshold reached. "
+                    "The maintenance worker will evaluate "
+                    "a candidate model."
+                )
+
+            else:
+
+                st.caption(
+                    f"Continual-learning progress: "
+                    f"{updated_feedback_count}/"
+                    f"{updated_minimum} confirmed labels."
+                )
+
+        except Exception:
+            pass
+
+        # ========================================================
+        # STORE LAST DECISION
+        # ========================================================
+
+        st.session_state[
+            "last_human_decision"
+        ] = audit_record
+
+    # ============================================================
+    # SESSION AUDIT TRAIL
+    # ============================================================
+
+    audit_history = st.session_state.get(
         "risk_decision_audit",
         [],
     )
 
-    if audit_records:
+    if audit_history:
 
         st.markdown(
-            "### 📝 Decision Audit Trail"
+            "### 📋 Decision Audit Trail"
         )
 
         audit_df = pd.DataFrame(
-            audit_records
+            audit_history
         )
 
-        st.dataframe(
-            audit_df[
-                [
-                    "timestamp",
-                    "transaction_id",
-                    "ml_risk",
-                    "evidence_risk",
-                    "final_risk",
-                    "model_recommendation",
-                    "final_decision",
-                    "decision_reason",
-                ]
-            ],
-            width="stretch",
-            hide_index=True,
-        )
+        display_columns = [
+            "timestamp",
+            "transaction_id",
+            "model_recommendation",
+            "human_decision",
+            "ground_truth",
+            "model_risk_level",
+            "fraud_probability",
+        ]
 
-        st.caption(
-            "Session-level audit trail. The model recommends; "
-            "the merchant/analyst retains final decision authority."
-        )
+        available_columns = [
+            column
+            for column in display_columns
+            if column in audit_df.columns
+        ]
 
+        if available_columns:
+
+            st.dataframe(
+                audit_df[available_columns],
+                use_container_width=True,
+                hide_index=True,
+            )
 
 
 
@@ -5727,6 +6267,9 @@ def find_related_transactions(
 def render_related_transactions(
     transaction,
 ):
+    current_id = str(
+    transaction.get("transaction_id", "")
+).strip().lower()
     """
     Display all dataset transactions connected to the current transaction.
     """

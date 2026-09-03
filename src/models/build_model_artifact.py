@@ -185,6 +185,8 @@ def main():
 
     metadata = {
         "model": "HistGradientBoostingClassifier",
+        "version": "initial-model",
+        "model_version": "initial-model",
         "features": feature_columns,
         "feature_count": len(feature_columns),
         "numeric_features": numeric_features,

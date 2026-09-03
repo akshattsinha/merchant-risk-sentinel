@@ -97,3 +97,36 @@ services:
       - --port=8000
 
     restart: unless-stopped
+
+
+  # ==========================================================
+  # MERCHANT RISK SENTINEL CONTINUAL LEARNING
+  # ==========================================================
+
+  maintenance:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    container_name: merchant-risk-maintenance
+
+    volumes:
+      # Source code
+      - ./src:/app/src
+
+      # Transaction data
+      - ./data:/app/data
+
+      # Fraud reports and model versions
+      - ./reports:/app/reports
+
+    command:
+      - /bin/sh
+      - -c
+      - |
+        while true; do
+          python -m src.learning.continual_learner
+          sleep 21600
+        done
+
+    restart: unless-stopped
