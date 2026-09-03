@@ -647,7 +647,7 @@ A prediction can include:
 ### 1. Clone
 
 ```bash
-git clone <your-repository-url>
+git clone https://github.com/akshattsinha/merchant-risk-sentinel.git
 cd merchant-risk-sentinel
 ```
 
@@ -910,4 +910,4 @@ Built as an AI risk engineering project focused on fraud detection, decisioning,
 
 ## License
 
-Add the project's chosen license before publishing the repository.
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
