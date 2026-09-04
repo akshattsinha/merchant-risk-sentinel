@@ -2626,6 +2626,265 @@ def predict_new_transaction(transaction):
     return response.json()
 
 
+def _safe_transaction_value(transaction, key, default=""):
+    value = transaction.get(key, default)
+    try:
+        if pd.isna(value):
+            return default
+    except Exception:
+        pass
+    return value
+
+
+def get_active_model_version():
+    """Return the model version currently active in the risk API."""
+    try:
+        response = requests.get(
+            f"{API_URL}/model-info",
+            timeout=5,
+        )
+        response.raise_for_status()
+        data = response.json()
+        return str(data.get("model_version", "")).strip()
+    except Exception:
+        return ""
+
+
+def _build_existing_transaction_payload(row):
+    """Convert an existing CSV row into the same /predict payload used for new transactions."""
+    return {
+        "transaction_id": str(
+            _safe_transaction_value(row, "transaction_id", "")
+        ),
+        "customer_id": str(
+            _safe_transaction_value(row, "customer_id", "")
+        ),
+        "merchant_id": str(
+            _safe_transaction_value(row, "merchant_id", "")
+        ),
+        "amount": float(
+            _safe_transaction_value(row, "amount", 0) or 0
+        ),
+        "timestamp": str(
+            _safe_transaction_value(row, "timestamp", "")
+        ),
+        "payment_method": str(
+            _safe_transaction_value(row, "payment_method", "")
+        ),
+        "device_id": str(
+            _safe_transaction_value(row, "device_id", "")
+        ),
+        "ip_id": str(
+            _safe_transaction_value(row, "ip_id", "")
+        ),
+        "address_id": str(
+            _safe_transaction_value(row, "address_id", "")
+        ),
+        "account_age_days": int(
+            float(
+                _safe_transaction_value(
+                    row,
+                    "account_age_days",
+                    0,
+                )
+                or 0
+            )
+        ),
+        "location": str(
+            _safe_transaction_value(row, "location", "")
+        ),
+    }
+
+
+def rescore_existing_incidents_with_active_model(incidents, transactions_df):
+    """
+    Re-score existing incidents through the currently active model.
+
+    Existing incident JSON records contain historical risk values. This
+    function maps each incident to its source transaction, sends that
+    transaction through the same /predict endpoint used by new
+    transactions, applies the existing deterministic risk-fusion engine,
+    and persists the refreshed risk values with the active model version.
+
+    This does not create new incidents and does not create learning labels.
+    Human-confirmed feedback remains the only source of continual-learning
+    labels.
+    """
+    active_version = get_active_model_version()
+
+    if not active_version:
+        return {
+            "status": "error",
+            "message": "Could not determine the active model version.",
+            "updated": 0,
+            "failed": 0,
+            "skipped": len(incidents or []),
+        }
+
+    if transactions_df is None or transactions_df.empty:
+        return {
+            "status": "error",
+            "message": "Transaction dataset is unavailable.",
+            "updated": 0,
+            "failed": 0,
+            "skipped": len(incidents or []),
+        }
+
+    transaction_lookup = {}
+    if "transaction_id" in transactions_df.columns:
+        for _, row in transactions_df.iterrows():
+            transaction_id = str(
+                _safe_transaction_value(row, "transaction_id", "")
+            ).strip()
+            if transaction_id:
+                transaction_lookup[transaction_id] = row.to_dict()
+
+    updated = 0
+    failed = 0
+    skipped = 0
+
+    refreshed_incidents = []
+
+    for incident in incidents or []:
+        incident_copy = dict(incident)
+        current_version = str(
+            incident_copy.get("model_version", "")
+        ).strip()
+
+        if current_version == active_version:
+            skipped += 1
+            refreshed_incidents.append(incident_copy)
+            continue
+
+        source_transaction_id = str(
+            incident_copy.get("source_transaction_id", "")
+        ).strip()
+
+        row = transaction_lookup.get(source_transaction_id)
+
+        # Legacy incidents may not have source_transaction_id. Fall back to
+        # the first transaction belonging to the incident.
+        if row is None and "incident_id" in transactions_df.columns:
+            incident_id = str(
+                incident_copy.get("incident_id", "")
+            ).strip()
+            if incident_id:
+                matches = transactions_df[
+                    transactions_df["incident_id"]
+                    .fillna("")
+                    .astype(str)
+                    .str.strip()
+                    .isin(incident_id_variants(incident_id))
+                ]
+                if not matches.empty:
+                    row = matches.iloc[0].to_dict()
+                    source_transaction_id = str(
+                        _safe_transaction_value(
+                            row,
+                            "transaction_id",
+                            "",
+                        )
+                    ).strip()
+
+        if row is None:
+            failed += 1
+            refreshed_incidents.append(incident_copy)
+            continue
+
+        try:
+            transaction = _build_existing_transaction_payload(row)
+            prediction = predict_new_transaction(transaction)
+            decision = calculate_live_risk_decision(
+                prediction,
+                transaction,
+            )
+
+            final_score = _safe_float(
+                decision.get("final_score", 0)
+            )
+            final_level = str(
+                decision.get("risk_level", "LOW")
+            ).upper()
+
+            incident_copy["risk_score"] = round(final_score)
+            incident_copy["severity"] = final_level
+            incident_copy["recommended_action"] = decision.get(
+                "recommended_action",
+                incident_copy.get("recommended_action", "REVIEW"),
+            )
+            incident_copy["model_version"] = active_version
+            incident_copy["ml_probability"] = round(
+                _safe_float(decision.get("ml_probability", 0)),
+                6,
+            )
+            incident_copy["ml_score"] = round(
+                _safe_float(decision.get("ml_score", 0)),
+                2,
+            )
+            incident_copy["evidence_score"] = round(
+                _safe_float(decision.get("evidence_score", 0)),
+                2,
+            )
+            incident_copy["final_risk_score"] = round(
+                final_score,
+                2,
+            )
+            incident_copy["last_model_scored_at"] = (
+                datetime.now().astimezone().isoformat()
+            )
+
+            if source_transaction_id and not incident_copy.get(
+                "source_transaction_id"
+            ):
+                incident_copy["source_transaction_id"] = (
+                    source_transaction_id
+                )
+
+            updated += 1
+
+        except Exception:
+            failed += 1
+
+        refreshed_incidents.append(incident_copy)
+
+    try:
+        INCIDENT_FILE.parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+        with open(
+            INCIDENT_FILE,
+            "w",
+            encoding="utf-8",
+        ) as file:
+            json.dump(
+                refreshed_incidents,
+                file,
+                indent=2,
+                default=str,
+            )
+    except Exception as exc:
+        return {
+            "status": "error",
+            "message": f"Could not persist refreshed incidents: {exc}",
+            "updated": updated,
+            "failed": failed,
+            "skipped": skipped,
+        }
+
+    load_incidents.clear()
+    load_json.clear()
+
+    return {
+        "status": "success",
+        "model_version": active_version,
+        "updated": updated,
+        "failed": failed,
+        "skipped": skipped,
+        "total": len(refreshed_incidents),
+    }
+
+
 def enrich_new_transaction_with_prediction(
     transaction,
     prediction,
@@ -5444,6 +5703,136 @@ def render_human_in_loop_decision(
             recommended_action,
         )
 
+    # ============================================================
+    # EXPLAINABLE RISK DECISION SUMMARY
+    # ============================================================
+    # Present the final decision in the same terms used by the
+    # underlying ML + deterministic evidence engine. This gives an
+    # analyst an immediate answer to: "Why was this flagged?"
+    decision_score = float(
+        decision.get(
+            "final_score",
+            risk_score,
+        ) or 0.0
+    )
+    decision_ml_score = float(
+        decision.get(
+            "ml_score",
+            fraud_probability_percent,
+        ) or 0.0
+    )
+    decision_evidence_score = float(
+        decision.get(
+            "evidence_score",
+            0.0,
+        ) or 0.0
+    )
+    decision_evidence_reasons = decision.get(
+        "evidence_reasons",
+        [],
+    )
+    if not isinstance(decision_evidence_reasons, list):
+        decision_evidence_reasons = []
+
+    reason_items = []
+    for evidence_reason in decision_evidence_reasons[:4]:
+        if not isinstance(evidence_reason, dict):
+            continue
+
+        factor_name = html.escape(
+            str(
+                evidence_reason.get(
+                    "factor",
+                    "Risk signal",
+                )
+            )
+        )
+        factor_score = float(
+            evidence_reason.get(
+                "score",
+                0.0,
+            ) or 0.0
+        )
+        reason_items.append(
+            f"<li><strong>{factor_name}</strong> "
+            f"<span>+{factor_score:.1f} evidence points</span></li>"
+        )
+
+    if reason_items:
+        reason_html = "".join(reason_items)
+    else:
+        reason_html = (
+            "<li><strong>No deterministic evidence signals</strong> "
+            "<span>The ML model is the primary risk signal.</span></li>"
+        )
+
+    decision_level_html = html.escape(
+        str(
+            decision.get(
+                "risk_level",
+                risk_level,
+            )
+        )
+    )
+    decision_action_html = html.escape(
+        str(recommended_action)
+    )
+
+    # ============================================================
+    # EXPLAINABLE RISK DECISION
+    # ============================================================
+    # Use native Streamlit components here instead of rendering the
+    # decision card as one large HTML/Markdown block. This prevents
+    # Streamlit from displaying the HTML source literally.
+    st.markdown("### 🔎 Explainable Risk Decision")
+    st.markdown(
+        f"**{decision_level_html} RISK — {decision_action_html}**"
+    )
+    st.caption("Why this transaction reached the current decision")
+
+    score_col, ml_col, evidence_col = st.columns(3)
+    with score_col:
+        visible_metric(
+            "Final Score",
+            f"{decision_score:.0f}/100",
+        )
+    with ml_col:
+        visible_metric(
+            "ML Signal",
+            f"{decision_ml_score:.1f}/100",
+        )
+    with evidence_col:
+        visible_metric(
+            "Evidence Signal",
+            f"+{decision_evidence_score:.1f} pts",
+        )
+
+    st.markdown("**Key reasons**")
+    if decision_evidence_reasons:
+        for evidence_reason in decision_evidence_reasons[:4]:
+            if not isinstance(evidence_reason, dict):
+                continue
+            factor_name = str(
+                evidence_reason.get("factor", "Risk signal")
+            )
+            factor_score = float(
+                evidence_reason.get("score", 0.0) or 0.0
+            )
+            st.markdown(
+                f"- **{factor_name}** — "
+                f"+{factor_score:.1f} evidence points"
+            )
+    else:
+        st.markdown(
+            "- **No deterministic evidence signals** — "
+            "The ML model is the primary risk signal."
+        )
+
+    st.caption(
+        "Decision source: ML probability + bounded deterministic evidence. "
+        "Analyst retains final operational authority."
+    )
+
     exposure_at_risk = float(
         transaction.get(
             "amount",
@@ -6385,6 +6774,63 @@ def render_related_transactions(
 
 if page == "Command Center":
 
+    # ========================================================
+    # ACTIVE MODEL -> EXISTING INCIDENTS
+    # ========================================================
+    # Incident records can pre-date the currently active model. Surface
+    # that state and let the analyst refresh all existing incidents through
+    # the same prediction path used by newly entered transactions.
+    incidents_for_sync = load_incidents()
+    active_model_version = get_active_model_version()
+    stale_incident_count = sum(
+        1
+        for item in incidents_for_sync
+        if active_model_version
+        and str(item.get("model_version", "")).strip()
+        != active_model_version
+    )
+
+    if stale_incident_count > 0:
+        st.info(
+            f"{stale_incident_count} existing incident(s) are using historical "
+            "risk scores. Re-score them with the active continual-learning model "
+            "to bring the Incident Centre up to date."
+        )
+
+        if st.button(
+            "🔄 Re-score Existing Incidents",
+            key="rescore_existing_incidents",
+            width="stretch",
+        ):
+            with st.spinner(
+                f"Re-scoring {stale_incident_count} incident(s) with "
+                f"model {active_model_version}..."
+            ):
+                sync_result = rescore_existing_incidents_with_active_model(
+                    incidents_for_sync,
+                    load_transactions(),
+                )
+
+            if sync_result.get("status") == "success":
+                st.success(
+                    f"Updated {sync_result['updated']} incident(s) with active "
+                    f"model {sync_result['model_version']}. "
+                    f"Skipped {sync_result['skipped']} already-current incident(s)."
+                )
+                if sync_result.get("failed", 0):
+                    st.warning(
+                        f"{sync_result['failed']} incident(s) could not be re-scored "
+                        "because their source transaction was unavailable or invalid."
+                    )
+                st.rerun()
+            else:
+                st.error(
+                    sync_result.get(
+                        "message",
+                        "Existing incidents could not be re-scored.",
+                    )
+                )
+
     selected_incident = (
         get_selected_incident()
     )
@@ -7049,6 +7495,108 @@ if page == "Command Center":
             incident,
             affected,
         )
+
+        # ====================================================
+        # CONTINUAL LEARNING / HUMAN REVIEW
+        # ====================================================
+        # Existing incidents must have the same analyst feedback loop as
+        # newly entered transactions. The analyst reviews a representative
+        # transaction from this incident, confirms the ground truth, and
+        # the confirmed label is sent to the same /feedback endpoint.
+        # INCONCLUSIVE remains audit-only.
+
+        st.header(
+            "🧠 Continual Learning & Human Review"
+        )
+
+        st.caption(
+            "Review this incident's representative transaction, compare the AI recommendation "
+            "with your investigation, and record the confirmed outcome. Confirmed fraud or "
+            "legitimate outcomes become continual-learning labels; inconclusive outcomes do not."
+        )
+
+        learning_transaction = None
+        learning_prediction = None
+
+        if affected is not None and not affected.empty:
+            source_transaction_id = str(
+                incident.get(
+                    "source_transaction_id",
+                    "",
+                )
+            ).strip()
+
+            candidate_rows = affected
+
+            if source_transaction_id and "transaction_id" in affected.columns:
+                source_match = affected[
+                    affected["transaction_id"]
+                    .astype(str)
+                    .str.strip()
+                    == source_transaction_id
+                ]
+
+                if not source_match.empty:
+                    candidate_rows = source_match
+
+            learning_row = candidate_rows.iloc[0]
+            learning_transaction = _build_existing_transaction_payload(
+                learning_row
+            )
+
+            active_learning_model = get_active_model_version()
+            learning_cache_key = (
+                incident_id,
+                learning_transaction.get("transaction_id", ""),
+                active_learning_model,
+            )
+
+            cached_learning = st.session_state.get(
+                "incident_learning_predictions",
+                {},
+            )
+
+            if learning_cache_key in cached_learning:
+                learning_prediction = cached_learning[learning_cache_key]
+            else:
+                try:
+                    with st.spinner(
+                        "Running the active continual-learning model on this incident..."
+                    ):
+                        learning_prediction = predict_new_transaction(
+                            learning_transaction
+                        )
+
+                    cached_learning[learning_cache_key] = learning_prediction
+                    st.session_state[
+                        "incident_learning_predictions"
+                    ] = cached_learning
+
+                except Exception as exc:
+                    st.error(
+                        "Could not run the active model for incident feedback: "
+                        f"{exc}"
+                    )
+                    learning_prediction = None
+
+        if learning_prediction is not None and learning_transaction is not None:
+            st.info(
+                f"Continual-learning review is attached to transaction "
+                f"**{learning_transaction.get('transaction_id', 'N/A')}** "
+                f"from incident **{incident_id}**. The active model is evaluated "
+                "before the analyst records the final outcome."
+            )
+
+            render_human_in_loop_decision(
+                learning_prediction,
+                learning_transaction,
+            )
+
+        elif affected is None or affected.empty:
+            st.warning(
+                "Continual-learning feedback cannot be opened because this incident "
+                "has no linked transaction record."
+            )
 
         st.divider()
 
