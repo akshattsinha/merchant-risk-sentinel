@@ -72,5 +72,8 @@
     "passes": true,
     "tolerance": 0.02,
     "rule": "Reject candidate only when both PR-AUC and F1 materially degrade."
-  }
+  },
+  "roc_auc": 0.9731108519388101,
+  "pr_auc": 0.8196688132467,
+  "f1": 0.7013574660633484
 }

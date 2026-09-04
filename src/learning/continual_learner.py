@@ -1451,6 +1451,7 @@ def _acquire_lock():
 
 
 def _release_lock():
+    
 
     try:
 
@@ -2155,6 +2156,17 @@ def retrain_if_needed(
 
             "feature_columns":
                 feature_columns,
+
+            # Expose active-model metrics at the top level for
+            # compatibility with metadata consumers and tests.
+            "roc_auc":
+                active_metrics["roc_auc"],
+
+            "pr_auc":
+                active_metrics["pr_auc"],
+
+            "f1":
+                active_metrics["f1"],
 
             "candidate_metrics":
                 candidate_metrics,
